@@ -33,6 +33,9 @@ Your agent has to publish its own copy, so the page belongs to you. Only the pag
 - `status`: open, answered, waiting, followup or done
 - `agentNote`, `agentAt`, `changedAt`, `ticketNote` {label, url}
 - `order`, `createdAt`
+- `agent`: {kind: "session" | "subagent", id, label, resume?, transcript?}, the session or subagent that owns the decision. The page shows "Owned by <label>" with the short id, and Copy copies `resume` if present, otherwise the id
+- `handlers`: [{kind: "subagent", id, label, startedAt, status: "running" | "finished" | "failed", summary?}], the subagents that worked on it (one per answer). The collapsed tile shows a count such as "1 agent running"
+- `trail`: [{at, actor, action}], an append-only history shown as "History (N)"
 
 `responses/<same slug>` is written by the page: {choice, note, submittedAt}.
 

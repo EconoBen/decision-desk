@@ -203,6 +203,21 @@ html { overflow-anchor: none; }
 .linkbtn.more { font-size: 0.8rem; }
 code { font-family: var(--mono); font-size: 0.86em; background: var(--bg); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
 @media (max-width: 560px) { .move-top { padding-left: 16px; } }
+.trace { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 10px; border-top: 1px dashed var(--hair); font-size: 0.84rem; color: var(--muted); min-width: 0; max-width: 100%; }
+.tt .trace { margin-top: 6px; padding-top: 8px; }
+.owner { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.handlers { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.trace-k { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.hchip { display: inline-flex; align-items: center; gap: 5px; background: var(--bg); border: 0; border-radius: 99px; padding: 2px 9px; font-size: 0.78rem; color: var(--fg); cursor: pointer; max-width: 100%; overflow-wrap: anywhere; }
+.hchip i, .agentchip i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--ok); }
+.hchip.running i, .agentchip.running i { background: var(--accent); animation: pulse 1.8s ease-in-out infinite; }
+.hchip.failed i, .agentchip.failed i { background: var(--err); }
+.hsum { flex-basis: 100%; font-size: 0.8rem; color: var(--muted); overflow-wrap: anywhere; }
+.agentchip { display: inline-flex; align-items: center; gap: 5px; font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+.agentchip.failed { color: var(--err); }
+.trail { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.trail .when { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
+.trail b { color: var(--fg); font-weight: 500; }
 /* floating send */
 .dock { position: fixed; z-index: 5; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   left: max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; pointer-events: none; }
@@ -368,6 +383,74 @@ function tileFoot(d) {
   return foot;
 }
 
+// Tracing: who owns a decision, which subagents worked it, and its history.
+const histOpen = new Set(), handlerOpen = new Set();
+const shortId = (id) => String(id || "").slice(0, 8);
+function handlers(d) { return Array.isArray(d.handlers) ? d.handlers.filter((h) => h && (h.id || h.label)) : []; }
+function handlerSummary(d) {
+  const hs = handlers(d); if (!hs.length) return null;
+  const n = (s) => hs.filter((h) => h.status === s).length, run = n("running"), fail = n("failed");
+  if (run) return ["running", `${run} agent${run > 1 ? "s" : ""} running`];
+  if (fail) return ["failed", `${fail} agent${fail > 1 ? "s" : ""} failed`];
+  return ["finished", `${hs.length} agent${hs.length > 1 ? "s" : ""} finished`];
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast("Copied"); }
+  catch (e) { setStatus(`Copy didn't work here. Select it instead: ${text}`, "err"); }
+}
+function traceBlock(d) {
+  const a = d.agent && typeof d.agent === "object" ? d.agent : null, hs = handlers(d);
+  const trail = Array.isArray(d.trail) ? d.trail.filter((t) => t && t.action) : [];
+  if (!a && !hs.length && !trail.length) return null;
+  const box = el("div", "trace");
+  if (a && (a.id || a.label)) {
+    const line = el("div", "owner");
+    const t = el("span", null, `Owned by ${a.label || a.kind || "an agent"}`);
+    if (a.id) { const sid = el("code", null, shortId(a.id)); sid.title = String(a.id); t.append(" ", sid); }
+    line.append(t);
+    const copy = String(a.resume || a.id || "");
+    if (copy) {
+      const b = el("button", "linkbtn", "Copy"); b.type = "button"; b.id = `cp-${d.id}`;
+      b.title = a.resume ? `Copy: ${a.resume}` : `Copy id: ${a.id}`;
+      b.setAttribute("aria-label", a.resume ? "Copy resume command" : "Copy session id");
+      b.onclick = () => copyText(copy);
+      line.append(b);
+    }
+    box.append(line);
+  }
+  if (hs.length) {
+    const row = el("div", "handlers"); row.append(el("span", "trace-k", "Handled by"));
+    hs.forEach((h, i) => {
+      const key = `${d.id}:${i}`, open = handlerOpen.has(key);
+      const st = ["running", "finished", "failed"].includes(h.status) ? h.status : "finished";
+      const c = el("button", "hchip " + st); c.type = "button"; c.id = `hd-${d.id}-${i}`;
+      c.title = [h.id, h.status, h.summary].filter(Boolean).join(" · ");
+      c.setAttribute("aria-expanded", String(open));
+      c.append(el("i"), el("code", null, shortId(h.id)), " " + String(h.label || ""));
+      c.onclick = () => { open ? handlerOpen.delete(key) : handlerOpen.add(key); render(); };
+      row.append(c);
+      if (open) row.append(el("span", "hsum", `${h.status || ""}${h.startedAt ? " · started " + ago(h.startedAt) : ""}${h.summary ? " · " + h.summary : ""}`));
+    });
+    box.append(row);
+  }
+  if (trail.length) {
+    const open = histOpen.has(d.id);
+    const b = el("button", "linkbtn", `History (${trail.length})`); b.type = "button"; b.id = `hi-${d.id}`;
+    b.setAttribute("aria-expanded", String(open)); b.setAttribute("aria-controls", `hl-${d.id}`);
+    b.onclick = () => { open ? histOpen.delete(d.id) : histOpen.add(d.id); render(); };
+    box.append(b);
+    if (open) {
+      const ol = el("ol", "trail"); ol.id = `hl-${d.id}`;
+      for (const t of trail) {
+        const li = el("li"); li.append(el("span", "when", ago(t.at) || String(t.at || "")), " ", el("b", null, String(t.actor || "")), " " + String(t.action));
+        ol.append(li);
+      }
+      box.append(ol);
+    }
+  }
+  return box;
+}
+
 function section(title, ...kids) { const b = el("div", "block"); b.append(el("h3", null, title), ...kids); return b; }
 function bullets(list, cls) { const ul = el("ul", "pts" + (cls ? " " + cls : "")); for (const t of list) ul.append(el("li", null, t)); return ul; }
 
@@ -408,6 +491,7 @@ function tileBody(d) {
     ck.append(line);
   } else ck.append(el("p", "unconfirmed", "Sources not confirmed"));
   body.append(ck);
+  const tr = traceBlock(d); if (tr) body.append(tr);
   const group = el("div", "choices"); group.setAttribute("role", "radiogroup"); group.setAttribute("aria-label", d.title || d.id);
   for (const c of d.choices || []) {
     const isRec = d.recommended && d.recommended === c.id;
@@ -463,6 +547,7 @@ function renderTile(d) {
   if (d.area) meta.append(el("span", "area-tag", String(d.area)));
   meta.append(el("span", "chip" + (u ? " " + u : ""), dueText(d)));
   for (const t of tickets(d)) meta.append(el("span", "tk " + ticketTone(t.status), ticketText(t)));
+  const hsum = handlerSummary(d); if (hsum) { const c = el("span", "agentchip " + hsum[0]); c.append(el("i"), hsum[1]); meta.append(c); }
   const fr = freshness(d); if (fr) meta.append(el("span", "fresh " + fr[0], fr[1]));
   tt.append(meta);
   head.append(el("span", "num", d.order != null ? String(d.order).padStart(2, "0") : ""), tt, el("span", "chev"));
@@ -526,6 +611,7 @@ function renderRow(d, inRecent) {
     const sent = ago(r.submittedAt); tt.append(el("span", "pend-meta", sent ? `Sent ${sent}` : "Sent"));
   }
   if (d.status !== "followup") { const ag = agentLine(d); if (ag) tt.append(ag); }
+  if (!editing) { const tr = traceBlock(d); if (tr) tt.append(tr); } // the edit body carries its own
   const tn = d.ticketNote;
   if ((d.status === "done" || d.status === "waiting") && tn && (tn.label || tn.url)) {
     const line = el("span", "pend-meta rec-on", "Recorded on ");
