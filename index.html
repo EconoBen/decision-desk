@@ -244,7 +244,7 @@ textarea::placeholder { color: var(--faint); }
 <main>
   <header>
     <p class="date" id="date"></p>
-    <h1 id="hello">Hello, Ben</h1>
+    <h1 id="hello">Hello</h1>
     <p class="countdown" id="countdown" hidden></p>
     <p class="status-line" id="statusLine">Loading…</p>
   </header>
@@ -872,7 +872,8 @@ async function doAct(id, kind) {
   sending.add(id); setStatus(""); render();
   try {
     if (kind === "reopen") {
-      await db.doc("responses/" + id).set({ choice: null, note: text ? `Reopened by Ben: ${text}` : "Reopened by Ben", submittedAt: now });
+      const who = String(SETTINGS.name || "").trim() || "you";
+      await db.doc("responses/" + id).set({ choice: null, note: text ? `Reopened by ${who}: ${text}` : `Reopened by ${who}`, submittedAt: now });
       await db.doc("decisions/" + id).update({ status: "open" });
       toast(`Reopened "${title}".`);
     } else if (kind === "info") {
