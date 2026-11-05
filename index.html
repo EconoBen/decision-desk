@@ -195,6 +195,14 @@ html { overflow-anchor: none; }
 .sort select { font: inherit; font-size: 0.85rem; color: var(--fg); background: var(--tile); border: 1px solid var(--hair); border-radius: 8px; padding: 4px 8px; cursor: pointer; max-width: 100%; }
 .grp-head { margin: 8px 0 -2px 4px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint); font-variant-numeric: tabular-nums; }
 .grp-head:first-child { margin-top: 0; }
+.move-top { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px 16px 0 calc(14px + 2.2rem + 6px); min-width: 0; }
+.move-top + .tile-head { padding-top: 8px; border-radius: 0; }
+.note-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; max-width: 100%; }
+.note-txt { overflow-wrap: anywhere; }
+.clamp3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.linkbtn.more { font-size: 0.8rem; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--bg); border-radius: 4px; padding: 0 4px; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .move-top { padding-left: 16px; } }
 /* floating send */
 .dock { position: fixed; z-index: 5; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   left: max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; pointer-events: none; }
@@ -366,7 +374,7 @@ function bullets(list, cls) { const ul = el("ul", "pts" + (cls ? " " + cls : "")
 function tileBody(d) {
   const p = picks[d.id] || {}, body = el("div", "tile-body"); body.id = `b-${d.id}`;
   // an open tile already shows `what` in its header; rows (Change answer) don't
-  if (d.what && !isOpenD(d)) body.append(section("What's being decided", el("p", "ctx", String(d.what))));
+  if (d.what && !asTile(d)) body.append(section("What's being decided", el("p", "ctx", String(d.what))));
   const bg = strList(d.background); if (bg.length) body.append(section("Background", bullets(bg)));
   if (d.when) body.append(section("When", el("p", "ctx", String(d.when))));
   const changes = Array.isArray(d.changes) ? d.changes.filter((c) => c && c.effect) : [];
@@ -459,6 +467,12 @@ function renderTile(d) {
   tt.append(meta);
   head.append(el("span", "num", d.order != null ? String(d.order).padStart(2, "0") : ""), tt, el("span", "chev"));
   head.onclick = () => { openId = isOpen ? null : d.id; closeEditors(); render(); };
+  if (d.status === "followup") {
+    const top = el("div", "move-top"); top.append(el("span", "badge move", "Your move"));
+    const ins = agentLine(d, "instr", ""); if (ins) top.append(ins);
+    if (responses[d.id]) top.append(el("span", "pend-meta", `Your earlier answer: ${answerText(d)}`));
+    tile.append(top);
+  }
   tile.append(head, tileFoot(d));
   if (act && act.id === d.id && act.kind === "info") tile.append(actBox(d, "info"));
   if (isOpen) tile.append(tileBody(d));
@@ -471,11 +485,26 @@ function answerText(d) {
   const parts = []; const l = label(d, r.choice); if (l) parts.push(l); if (r.note) parts.push(`"${r.note}"`);
   return parts.join(" · ") || "No answer recorded";
 }
+// A followup with fresh choices is answered like an open decision, as a full tile.
+function asTile(d) { return isOpenD(d) || (d.status === "followup" && Array.isArray(d.choices) && d.choices.some((c) => c && c.id)); }
+const noteOpen = new Set();
+// Text with `backtick` spans rendered as inline code (as text nodes, never HTML).
+function codeText(parent, text) { String(text).split("`").forEach((part, i) => { if (part) parent.append(i % 2 ? el("code", null, part) : part); }); }
 function agentLine(d, cls, prefix) {
   if (!d.agentNote) return null;
-  const a = el("span", cls || "agent", (prefix ?? "Agent: ") + String(d.agentNote)); const w = ago(d.agentAt);
-  if (w) a.append(el("span", "when", ` · ${w}`));
-  return a;
+  const wrap = el("span", (cls || "agent") + " note-wrap"), txt = el("span", "note-txt");
+  const pre = prefix ?? "Agent: "; if (pre) txt.append(pre);
+  codeText(txt, d.agentNote);
+  const w = ago(d.agentAt); if (w) txt.append(el("span", "when", ` · ${w}`));
+  wrap.append(txt);
+  if (String(d.agentNote).length > 180) { // shortcut: length stands in for "more than 3 lines"
+    const open = noteOpen.has(d.id); if (!open) txt.classList.add("clamp3");
+    const b = el("button", "linkbtn more", open ? "less" : "more"); b.type = "button"; b.id = `mo-${d.id}`;
+    b.setAttribute("aria-expanded", String(open));
+    b.onclick = () => { open ? noteOpen.delete(d.id) : noteOpen.add(d.id); render(); };
+    wrap.append(b);
+  }
+  return wrap;
 }
 
 // Any item that isn't open, as a compact row with its true status. Rows stay where they were rendered.
@@ -645,6 +674,8 @@ function render() {
       others: orderIds("others", of("others")),
       recent: orderIds("recent", of("recent")),
     };
+    const firstMove = layout.need.map((id) => byId.get(id)).find((d) => d && d.status === "followup" && asTile(d));
+    if (firstMove && openId == null) openId = firstMove.id;
   }
   if (!layout) return;
   const placed = new Set(Object.values(layout).flat());
@@ -661,7 +692,7 @@ function render() {
 
   const anchor = captureAnchor();
   for (const [g, listId, secId] of GROUPS) {
-    const items = layout[g].map((id) => { const d = byId.get(id); return d ? { node: isOpenD(d) ? renderTile(d) : renderRow(d, g === "recent"), bucket: bucketOf(d) } : null; }).filter(Boolean);
+    const items = layout[g].map((id) => { const d = byId.get(id); return d ? { node: asTile(d) ? renderTile(d) : renderRow(d, g === "recent"), bucket: bucketOf(d) } : null; }).filter(Boolean);
     const els = withHeaders(items);
     if (g === "need") {
       $(secId).hidden = !decisions.length;
