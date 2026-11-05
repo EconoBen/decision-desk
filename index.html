@@ -193,6 +193,8 @@ html { overflow-anchor: none; }
 .sec-head h2 { margin-bottom: 0; }
 .sort { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
 .sort select { font: inherit; font-size: 0.85rem; color: var(--fg); background: var(--tile); border: 1px solid var(--hair); border-radius: 8px; padding: 4px 8px; cursor: pointer; max-width: 100%; }
+.grp-head { margin: 8px 0 -2px 4px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint); font-variant-numeric: tabular-nums; }
+.grp-head:first-child { margin-top: 0; }
 /* floating send */
 .dock { position: fixed; z-index: 5; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   left: max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; pointer-events: none; }
@@ -582,9 +584,41 @@ function orderIds(g, ds) {
   if (!cmp) cmp = g === "need" ? byUrgency : (a, b) => desc(tsOf((responses[a.id] || {}).submittedAt || a.agentAt || a.createdAt), tsOf((responses[b.id] || {}).submittedAt || b.agentAt || b.createdAt));
   return [...ds].sort(cmp).map((d) => d.id);
 }
+// Group headers for the chosen sort. A decision's bucket is fixed when the sort is applied, so live data can't split a group.
+let frozenBucket = {};
+function dayDiff(t) { const a = new Date(t), b = new Date(); a.setHours(0, 0, 0, 0); b.setHours(0, 0, 0, 0); return Math.round((b - a) / 864e5); }
+function bucketFor(d) {
+  if (sortMode === "area") return d.area ? String(d.area) : "No area";
+  if (sortMode === "deadline") {
+    const t = tsOf(d.due), c = Date.parse(SETTINGS.cutoffAt), now = Date.now();
+    if (isNaN(t)) return "No deadline";
+    if (t < now) return "Overdue";
+    if (!isNaN(c) && t <= c) return `Before the cutoff (${new Date(c).toLocaleDateString([], { month: "short", day: "numeric" })})`;
+    return t - now <= 7 * 864e5 ? "This week" : "Later";
+  }
+  if (sortMode === "newest" || sortMode === "updated") {
+    const t = sortMode === "newest" ? tsOf(d.createdAt) : touched(d);
+    if (isNaN(t) || t === -Infinity) return "Earlier";
+    const n = dayDiff(t); return n <= 0 ? "Today" : n === 1 ? "Yesterday" : "Earlier";
+  }
+  return null; // urgency and number stay flat
+}
+function bucketOf(d) { return d.id in frozenBucket ? frozenBucket[d.id] : (frozenBucket[d.id] = bucketFor(d)); }
+// Insert a small header before each run of items that share a bucket.
+function withHeaders(items) {
+  if (sortMode === "urgency" || sortMode === "number") return items.map((x) => x.node);
+  const out = [];
+  for (let i = 0; i < items.length;) {
+    let j = i; while (j < items.length && items[j].bucket === items[i].bucket) j++;
+    if (items[i].bucket != null) out.push(el("h3", "grp-head", `${items[i].bucket} · ${j - i}`));
+    for (let k = i; k < j; k++) out.push(items[k].node);
+    i = j;
+  }
+  return out;
+}
 function setSort(mode) {
   if (!SORTS[mode]) return;
-  sortMode = mode;
+  sortMode = mode; frozenBucket = {};
   try { localStorage.setItem("decisions:sort", mode); } catch (e) {}
   if (layout) {
     const byId = new Map(decisions.map((d) => [d.id, d]));
@@ -627,7 +661,8 @@ function render() {
 
   const anchor = captureAnchor();
   for (const [g, listId, secId] of GROUPS) {
-    const els = layout[g].map((id) => { const d = byId.get(id); return d ? (isOpenD(d) ? renderTile(d) : renderRow(d, g === "recent")) : null; }).filter(Boolean);
+    const items = layout[g].map((id) => { const d = byId.get(id); return d ? { node: isOpenD(d) ? renderTile(d) : renderRow(d, g === "recent"), bucket: bucketOf(d) } : null; }).filter(Boolean);
+    const els = withHeaders(items);
     if (g === "need") {
       $(secId).hidden = !decisions.length;
       if (!els.length) { const c = el("div", "calm"); c.append(el("strong", null, "You're all caught up"), "Nothing needs your call right now."); els.push(c); }
@@ -754,7 +789,9 @@ setInterval(() => { greet(); renderCountdown(); render(); if (db) renderDigest()
   }, (e) => { clearTimeout(timer); db = null; notice(`Lost the connection to the data store (${e.code}). Reload the page to try again.`, true); refreshDock(); });
   db.doc("meta/settings").onSnapshot((snap) => {
     const v = (snap.exists && snap.data()) || {};
+    const prevCutoff = SETTINGS.cutoffAt;
     for (const k of Object.keys(DEFAULTS)) SETTINGS[k] = typeof v[k] === "string" && v[k].trim() ? v[k].trim() : DEFAULTS[k];
+    if (SETTINGS.cutoffAt !== prevCutoff && sortMode === "deadline") frozenBucket = {}; // deadline headers name the cutoff
     greet(); renderCountdown(); render();
   }, () => {});
   renderDigest();
