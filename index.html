@@ -211,7 +211,9 @@ h3 { font-size: 0.82rem; font-weight: 600; color: var(--muted); margin: 0; }
 label.note { display: flex; flex-direction: column; gap: 8px; font-size: 0.86rem; font-weight: 600; color: var(--muted); }
 textarea { font: inherit; font-size: 0.95rem; font-weight: 400; color: var(--ink); background: var(--sunken); border: 0; border-radius: var(--r-md); padding: 12px 14px; min-height: 3em; resize: vertical; }
 textarea::placeholder { color: var(--faint); }
-.send-sum { margin: 0 0 -10px; text-align: right; font-size: 0.86rem; color: var(--muted); overflow-wrap: anywhere; }
+.sum-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; margin-bottom: -10px; }
+.send-sum { margin: 0; text-align: right; font-size: 0.86rem; color: var(--muted); overflow-wrap: anywhere; }
+.sel-hint { grid-column: 2; font-size: 0.78rem; font-weight: 500; color: var(--muted); }
 .body-send { display: flex; justify-content: flex-end; }
 .act-box { display: flex; flex-direction: column; gap: 10px; padding: 0 20px 20px var(--indent); }
 
@@ -624,6 +626,7 @@ function tileBody(d) {
       if (d.recommended) w.append(el("b", null, isRec ? "Why: " : "Why not: "));
       w.append(String(why)); b.append(w);
     }
+    if (p.choice === c.id) b.append(el("span", "sel-hint", "Selected · tap again to clear"));
     b.onclick = () => { const cur = pick(d.id); cur.choice = cur.choice === c.id ? null : c.id; setStatus(""); render(); };
     group.append(b);
   }
@@ -637,7 +640,14 @@ function tileBody(d) {
     if (wasQueued !== queuedIds().includes(d.id)) render(); else { refreshDock(); const sm = $(`ss-${d.id}`); if (sm) sm.textContent = sendSummary(d); }
   };
   lab.append(ta); body.append(lab);
-  const sm = el("p", "send-sum", sendSummary(d)); sm.id = `ss-${d.id}`; sm.setAttribute("aria-live", "polite"); body.append(sm);
+  const sumRow = el("div", "sum-row");
+  const sm = el("p", "send-sum", sendSummary(d)); sm.id = `ss-${d.id}`; sm.setAttribute("aria-live", "polite"); sumRow.append(sm);
+  if (p.choice) {
+    const cc = el("button", "linkbtn", "Clear choice"); cc.type = "button"; cc.id = `cc-${d.id}`;
+    cc.onclick = () => { pick(d.id).choice = null; setStatus(""); render(); };
+    sumRow.append(cc);
+  }
+  body.append(sumRow);
   const bs = el("div", "body-send"); bs.append(sendBtn(d, `sb-${d.id}`, d.status === "answered" ? "Resend answer" : "Send this answer")); body.append(bs);
   return body;
 }
