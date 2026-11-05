@@ -73,10 +73,9 @@ h2 { font-family: var(--display); font-size: 1.05rem; font-weight: 600; letter-s
 
 /* tiles */
 #tiles, .rows, #recent { display: flex; flex-direction: column; gap: 12px; }
-.tile { --indent: calc(18px + 2.2rem + 4px); position: relative; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-1); min-width: 0; transition: box-shadow 0.2s; }
+.tile { --indent: 20px; position: relative; background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--sh-1); min-width: 0; transition: box-shadow 0.2s; }
 .tile:not(.row):hover, .tile.open { box-shadow: var(--sh-2); }
-.tile-head { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr) auto; gap: 0 4px; align-items: start; width: 100%; text-align: left; background: none; border: 0; padding: 20px 20px 0 18px; cursor: pointer; border-radius: var(--r-lg) var(--r-lg) 0 0; }
-.num { font-size: 0.78rem; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; padding-top: 4px; }
+.tile-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; align-items: start; width: 100%; text-align: left; background: none; border: 0; padding: 20px 20px 0 20px; cursor: pointer; border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .tt { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .title { font-family: var(--display); font-size: 1.16rem; font-weight: 600; letter-spacing: -0.012em; line-height: 1.3; text-wrap: balance; overflow-wrap: anywhere; }
 .sum { color: var(--muted); font-size: 0.95rem; line-height: 1.5; overflow-wrap: anywhere; }
@@ -89,10 +88,11 @@ h2 { font-family: var(--display); font-size: 1.05rem; font-weight: 600; letter-s
 .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line); flex: none; }
 .chip.red { color: var(--err); font-weight: 600; } .chip.red::before { background: var(--err); }
 .chip.amber { color: var(--warn); font-weight: 600; } .chip.amber::before { background: var(--warn); }
-.tk { font-size: 0.76rem; font-weight: 500; padding: 1px 8px; border-radius: 99px; white-space: nowrap; background: var(--sunken); color: var(--muted); font-variant-numeric: tabular-nums; }
-.tk.t-done { background: var(--ok-soft); color: var(--ok); }
-.tk.t-test { background: var(--teal-soft); color: var(--teal); }
-.tk.t-prog { background: var(--info-soft); color: var(--info); }
+.tk { display: inline-flex; align-items: center; gap: 6px; font-size: 0.76rem; font-weight: 500; padding: 1px 9px 1px 8px; border-radius: 99px; white-space: nowrap; background: var(--sunken); color: var(--muted); font-variant-numeric: tabular-nums; }
+.tk::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); flex: none; }
+.tk.t-done::before { background: var(--ok); }
+.tk.t-test::before { background: var(--teal); }
+.tk.t-prog::before { background: var(--info); }
 .fresh { font-size: 0.76rem; font-weight: 600; color: var(--info); }
 .fresh.upd { color: var(--teal); }
 .agentchip { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -116,8 +116,9 @@ h2 { font-family: var(--display); font-size: 1.05rem; font-weight: 600; letter-s
 .linkbtn.more { font-size: 0.76rem; padding: 1px 9px; margin-top: 4px; }
 
 /* followup ("Your move") */
-.move-top { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 20px 20px 0 var(--indent); min-width: 0; }
-.move-top + .tile-head { padding-top: 10px; border-radius: 0; }
+.kicker { margin-bottom: 2px; font-size: 0.78rem; }
+.callout { margin: 14px 20px 0 var(--indent); padding: 12px 14px; background: var(--sunken); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.callout .clamp3 { -webkit-line-clamp: 2; }
 .instr { font-size: 0.92rem; font-weight: 500; color: var(--ink); line-height: 1.55; overflow-wrap: anywhere; }
 .note-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; max-width: 100%; }
 .note-txt { overflow-wrap: anywhere; }
@@ -137,7 +138,7 @@ h2 { font-family: var(--display); font-size: 1.05rem; font-weight: 600; letter-s
 
 /* rows: sent, waiting and done items */
 .tile.row { box-shadow: none; background: var(--surface); border-radius: var(--r-md); }
-.row-head { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 0 4px; padding: 16px 20px 0 18px; }
+.row-head { display: grid; grid-template-columns: minmax(0, 1fr); padding: 16px 20px 0 20px; }
 .row-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; min-width: 0; }
 .title-wrap { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
 .tile.row .title { font-size: 1.02rem; }
@@ -257,10 +258,13 @@ textarea::placeholder { color: var(--faint); }
 
 @media (max-width: 560px) {
   main { padding-block: 36px 150px; gap: 40px; }
-  .tile { --indent: 18px; }
-  .tile-head, .row-head { grid-template-columns: 1.9rem minmax(0, 1fr) auto; padding-left: 14px; padding-right: 16px; }
-  .row-head { grid-template-columns: 1.9rem minmax(0, 1fr); }
-  .tile-foot, .tile-body, .act-box, .move-top { padding-right: 16px; }
+  .tile { --indent: 16px; }
+  .tile-head, .row-head { padding-left: 16px; padding-right: 16px; }
+  .tile-foot, .tile-body, .act-box { padding-right: 16px; }
+  .callout { margin-right: 16px; }
+  .status-line { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 12px; white-space: nowrap; font-size: 0.86rem; }
+  .status-line span { gap: 5px; }
+  .status-line .long { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 </style>
@@ -359,7 +363,15 @@ function urgency(d) {
   if (t <= now || (!isNaN(c) && t <= c)) return "red";
   return t - now <= 3 * 864e5 ? "amber" : "";
 }
-function dueText(d) { const t = Date.parse(d.due); return d.due && !isNaN(t) ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric" }) : "No deadline"; }
+function dueText(d) {
+  const t = Date.parse(d.due); if (!d.due || isNaN(t)) return "No deadline";
+  const days = dayDiff(t) * -1; // whole calendar days from today
+  if (days < 0) return `Overdue ${-days}d`;
+  if (days === 0) return "Due today";
+  if (days === 1) return "Due tomorrow";
+  if (days < 7) return "Due " + new Date(t).toLocaleDateString([], { weekday: "short" });
+  return "Due " + new Date(t).toLocaleDateString([], { month: "short", day: "numeric" });
+}
 function ticketTone(s) { s = String(s || "").trim().toLowerCase(); return s === "done" ? "t-done" : s === "in testing" ? "t-test" : s === "in progress" ? "t-prog" : "t-back"; }
 function tickets(d) { return Array.isArray(d.tickets) ? d.tickets.filter((t) => t && t.id) : []; }
 function ticketText(t) { return `${t.id}${t.status ? " · " + t.status : ""}`; }
@@ -531,7 +543,7 @@ function answerEl(d, prefix) {
   const r = responses[d.id], wrap = el("span", "pend-ans");
   wrap.append(prefix);
   if (!r) { wrap.append(el("b", null, "No answer recorded")); return wrap; }
-  const l = label(d, r.choice); if (l) wrap.append(el("b", null, l));
+  const l = label(d, r.choice) || (r.choice ? String(r.choice) : null); if (l) wrap.append(el("b", null, l)); // raw id if the choices were rewritten
   const n = String(r.note || "").trim();
   if (n) {
     if (l) wrap.append(" + note");
@@ -649,7 +661,9 @@ function renderTile(d) {
   tile.dataset.id = d.id; tile.tabIndex = -1;
   const head = el("button", "tile-head"); head.type = "button"; head.id = `h-${d.id}`;
   head.setAttribute("aria-expanded", String(isOpen)); head.setAttribute("aria-controls", `b-${d.id}`);
-  const tt = el("span", "tt"); tt.append(el("span", "title", d.title || d.id));
+  const tt = el("span", "tt");
+  if (d.status === "followup") tt.append(el("span", "badge move kicker", "Your move"));
+  tt.append(el("span", "title", d.title || d.id));
   if (d.what || d.summary) tt.append(el("span", "sum clamp", String(d.what || d.summary)));
   const meta = el("span", "metas");
   if (d.area) meta.append(el("span", "area-tag", String(d.area)));
@@ -658,16 +672,17 @@ function renderTile(d) {
   const hsum = handlerSummary(d); if (hsum) { const c = el("span", "agentchip " + hsum[0]); c.append(el("i"), hsum[1]); meta.append(c); }
   const fr = freshness(d); if (fr) meta.append(el("span", "fresh " + fr[0], fr[1]));
   tt.append(meta);
-  head.append(el("span", "num", d.order != null ? String(d.order).padStart(2, "0") : ""), tt, el("span", "chev"));
+  head.append(tt, el("span", "chev"));
   head.onclick = () => { openId = isOpen ? null : d.id; closeEditors(); render(); };
+  tile.append(head);
   if (d.status === "followup") {
-    const top = el("div", "move-top"); top.append(el("span", "badge move", "Your move"));
-    const ins = agentLine(d, "instr", ""); if (ins) top.append(ins);
+    const note = el("div", "callout");
+    const ins = agentLine(d, "instr", ""); if (ins) note.append(ins);
     const er = responses[d.id];
-    if (er && (er.choice || String(er.note || "").trim())) { const ea = answerEl(d, "Your earlier answer: "); ea.classList.add("earlier"); top.append(ea); }
-    tile.append(top);
+    if (er && (label(d, er.choice) || String(er.note || "").trim())) { const ea = answerEl(d, "Your earlier answer: "); ea.classList.add("earlier"); note.append(ea); }
+    if (note.childElementCount) tile.append(note);
   }
-  tile.append(head, tileFoot(d));
+  tile.append(tileFoot(d));
   if (act && act.id === d.id && act.kind === "info") tile.append(actBox(d, "info"));
   if (isOpen) tile.append(tileBody(d));
   return tile;
@@ -691,7 +706,7 @@ function agentLine(d, cls, prefix) {
   codeText(txt, d.agentNote);
   const w = ago(d.agentAt); if (w) txt.append(el("span", "when", ` · ${w}`));
   wrap.append(txt);
-  if (String(d.agentNote).length > 180) { // shortcut: length stands in for "more than 3 lines"
+  if (String(d.agentNote).length > 140) { // shortcut: length stands in for "more than 2-3 lines"
     const open = noteOpen.has(d.id); if (!open) txt.classList.add("clamp3");
     const b = el("button", "linkbtn more", open ? "less" : "more"); b.type = "button"; b.id = `mo-${d.id}`;
     b.setAttribute("aria-expanded", String(open));
@@ -728,7 +743,7 @@ function renderRow(d, inRecent) {
     else line.append(String(tn.label));
     tt.append(line);
   }
-  head.append(el("span", "num", d.order != null ? String(d.order).padStart(2, "0") : ""), tt);
+  head.append(tt);
   row.append(head);
 
   const foot = el("div", "tile-foot"), links = el("span", "row-acts");
@@ -881,8 +896,11 @@ function render() {
   const count = (s) => decisions.filter((d) => (d.status || "open") === s).length;
   const nOpen = count("open"), nMove = count("followup");
   const sl = $("statusLine"); sl.replaceChildren();
-  for (const [cls, n, word] of [["need", nOpen + nMove, "need you" + (nMove ? ` (incl. ${nMove} your move)` : "")], ["prog", count("answered"), "waiting on your agent"], ["others", count("waiting"), "waiting on others"], ["done", count("done"), "done"]].filter(([cls, n]) => n || cls === "need" || cls === "done")) {
-    const s = el("span", cls); s.append(el("i"), el("b", null, String(n)), " " + word); sl.append(s);
+  for (const [cls, n, word, extra] of [["need", nOpen + nMove, "need you", nMove ? ` (incl. ${nMove} your move)` : ""], ["prog", count("answered"), "with", " your agent"], ["others", count("waiting"), "waiting", " on others"], ["done", count("done"), "done", ""]].filter(([cls, n]) => n || cls === "need" || cls === "done")) {
+    const s = el("span", cls); s.append(el("i"), el("b", null, String(n)), " " + (cls === "prog" ? "with agent" : word));
+    if (cls === "prog") { s.lastChild.textContent = " with "; s.append(el("span", "long", "your "), "agent"); }
+    else if (extra) s.append(el("span", "long", extra));
+    sl.append(s);
   }
 
   const anchor = captureAnchor();
