@@ -1,0 +1,769 @@
+<title>Decisions for Ben</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a home screen. Greeting header, a stack of soft tiles that need Ben (one expands in place), a quiet activity feed, and a floating send button that appears only when answers are queued. */
+:root {
+  --bg: #f3f4f7; --tile: #ffffff; --tile-hover: #fafbfc; --fg: #171a21; --muted: #646b78; --faint: #9aa0ab; --hair: #e4e6eb;
+  --accent: #3552c8; --accent-soft: #e9edfb; --on-accent: #ffffff;
+  --ok: #1d7a4c; --ok-soft: #e3f2e9; --teal: #0e7470; --teal-soft: #dcf1ef; --warn: #a06200; --warn-soft: #fbefd9; --err: #b3261e; --err-soft: #fbe9e7;
+  --shadow: 0 1px 2px rgba(23, 26, 33, 0.04), 0 4px 16px rgba(23, 26, 33, 0.05);
+  --display: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1115; --tile: #181b21; --tile-hover: #1c2027; --fg: #e8eaef; --muted: #9ba2af; --faint: #6b7280; --hair: #2a2f38;
+  --accent: #8aa2f5; --accent-soft: #1f2741; --on-accent: #0f1115;
+  --ok: #6fca99; --ok-soft: #17291f; --teal: #5cc6c0; --teal-soft: #12302e; --warn: #e3a74c; --warn-soft: #33270f; --err: #f08a80; --err-soft: #3a2220;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1115; --tile: #181b21; --tile-hover: #1c2027; --fg: #e8eaef; --muted: #9ba2af; --faint: #6b7280; --hair: #2a2f38;
+  --accent: #8aa2f5; --accent-soft: #1f2741; --on-accent: #0f1115;
+  --ok: #6fca99; --ok-soft: #17291f; --teal: #5cc6c0; --teal-soft: #12302e; --warn: #e3a74c; --warn-soft: #33270f; --err: #f08a80; --err-soft: #3a2220;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25); color-scheme: dark }
+
+body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { max-width: 860px; margin: 0 auto; padding-block: 40px 140px; display: flex; flex-direction: column; gap: 40px; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+/* header */
+header { display: flex; flex-direction: column; gap: 6px; }
+.date { font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0; }
+h1 { font-family: var(--display); font-size: clamp(1.75rem, 6vw, 2.25rem); font-weight: 600; letter-spacing: -0.02em; line-height: 1.15; margin: 0; text-wrap: balance; }
+.status-line { margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.status-line span { display: inline-flex; align-items: center; gap: 7px; }
+.status-line i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.status-line .need i { background: var(--accent); }
+.status-line .prog i { background: var(--warn); }
+.status-line .done i { background: var(--ok); }
+.status-line b { color: var(--fg); font-weight: 600; }
+
+/* sections */
+section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+h2 { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 2px 4px; }
+.notice { padding: 14px 16px; border-radius: 12px; background: var(--tile); color: var(--muted); }
+.notice.err { background: var(--err-soft); color: var(--fg); }
+.calm { padding: 28px 20px; text-align: center; color: var(--muted); }
+.calm strong { display: block; color: var(--fg); font-size: 1.05rem; font-weight: 600; margin-bottom: 2px; }
+
+/* tiles */
+#tiles { display: flex; flex-direction: column; gap: 10px; }
+.tile { background: var(--tile); border-radius: 16px; box-shadow: var(--shadow); min-width: 0; transition: box-shadow 0.15s; }
+.tile-head { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr) auto; gap: 0 6px; align-items: start; width: 100%; text-align: left;
+  background: none; border: 0; padding: 16px 16px 0 14px; cursor: pointer; border-radius: 16px 16px 0 0; }
+.tile-head:hover .title { color: var(--accent); }
+.num { font-family: var(--mono); font-size: 0.8rem; color: var(--faint); font-variant-numeric: tabular-nums; padding-top: 3px; }
+.tt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.title { font-size: 1.02rem; font-weight: 600; line-height: 1.35; text-wrap: balance; overflow-wrap: anywhere; }
+.sum { color: var(--muted); font-size: 0.92rem; overflow-wrap: anywhere; }
+.chev { width: 8px; height: 8px; margin: 8px 4px 0 8px; border-right: 1.5px solid var(--faint); border-bottom: 1.5px solid var(--faint); transform: rotate(45deg); transition: transform 0.15s; }
+.tile.open .chev { transform: rotate(-135deg); margin-top: 11px; }
+.tile-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 16px 14px calc(14px + 2.2rem + 6px); }
+.rec-line { font-size: 0.88rem; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.rec-line b { color: var(--fg); font-weight: 500; }
+.picked { display: inline-flex; align-items: center; gap: 6px; font-size: 0.88rem; font-weight: 500; color: var(--ok); min-width: 0; overflow-wrap: anywhere; }
+.picked::before { content: "✓"; display: grid; place-items: center; flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--ok-soft); font-size: 0.72rem; font-weight: 700; }
+.accept { flex: none; background: var(--accent-soft); color: var(--accent); border: 0; border-radius: 99px; padding: 6px 14px; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+.accept:hover { filter: brightness(0.97); }
+.accept.undo { background: transparent; color: var(--muted); font-weight: 500; }
+
+/* expanded body */
+.tile-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 20px 20px calc(14px + 2.2rem + 6px); border-top: 1px solid var(--hair); line-height: 1.6; min-width: 0; }
+.tile-body > * { min-width: 0; }
+.pts { margin: 0; padding-left: 1.1em; display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+.pts li::marker { color: var(--faint); }
+.meta { margin-top: 4px; font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
+.meta.has-risk { color: var(--warn); }
+.block { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+h3 { font-size: 0.74rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0; }
+.risks li::marker { color: var(--warn); }
+.none { margin: 0; color: var(--muted); font-size: 0.92rem; }
+.chk { margin: 0; color: var(--muted); font-size: 0.86rem; overflow-wrap: anywhere; }
+.chk-note { color: var(--faint); }
+.unconfirmed { margin: 0; color: var(--warn); font-size: 0.86rem; font-weight: 500; }
+.unconfirmed::before { content: "! "; font-weight: 700; }
+.ctx { margin: 0; overflow-wrap: anywhere; }
+.links { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.9rem; }
+.links a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+.links a:hover { text-decoration: underline; }
+.links a::after { content: " ↗"; color: var(--faint); }
+.choices { display: flex; flex-direction: column; gap: 4px; }
+.choice { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 10px; text-align: left; width: 100%;
+  background: transparent; border: 0; border-radius: 10px; padding: 10px 12px; margin-left: -12px; width: calc(100% + 12px); cursor: pointer; }
+.choice:hover { background: var(--bg); }
+.choice[aria-checked="true"] { background: var(--accent-soft); }
+.dot { grid-row: 1; width: 16px; height: 16px; margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--faint); }
+.choice[aria-checked="true"] .dot { border: 5px solid var(--accent); }
+.choice .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-weight: 500; min-width: 0; }
+.tag { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ok); background: var(--ok-soft); padding: 1px 7px; border-radius: 99px; }
+.why { grid-column: 2; color: var(--muted); font-size: 0.9rem; line-height: 1.55; overflow-wrap: anywhere; }
+.why b { font-weight: 600; color: var(--fg); }
+.why.is-rec b { color: var(--ok); }
+label.note { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; color: var(--muted); }
+textarea { font: inherit; font-size: 0.95rem; color: var(--fg); background: var(--bg); border: 1px solid transparent; border-radius: 10px; padding: 10px 12px; min-height: 2.8em; resize: vertical; }
+textarea:focus { border-color: var(--hair); }
+
+
+.acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.send-one { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 99px; padding: 6px 16px; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+.send-one:disabled { opacity: 0.45; cursor: default; }
+.body-send { display: flex; justify-content: flex-end; }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+.pend-ans { font-size: 0.92rem; color: var(--muted); overflow-wrap: anywhere; }
+.pend-ans b { color: var(--fg); font-weight: 500; }
+.pend-meta { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
+.agent { font-size: 0.88rem; color: var(--fg); overflow-wrap: anywhere; }
+.agent .when { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
+.linkbtn { background: none; border: 0; padding: 2px 0; color: var(--accent); font-size: 0.86rem; font-weight: 500; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+html { overflow-anchor: none; }
+#recent, .rows { display: flex; flex-direction: column; gap: 8px; }
+.tile.row { box-shadow: none; }
+.row-head { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr); gap: 0 6px; padding: 14px 16px 0 14px; }
+.row-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; min-width: 0; }
+.tile.row .title { font-size: 0.97rem; }
+.tile.row.done .title { color: var(--muted); }
+.badge { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
+.badge.sent { background: var(--bg); color: var(--muted); }
+.badge.sent::before { content: ""; width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid currentColor; }
+.badge.prog { background: var(--accent-soft); color: var(--accent); }
+.badge.prog::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.8s ease-in-out infinite; }
+.badge.done { background: var(--ok-soft); color: var(--ok); }
+.badge.done::before { content: "✓"; font-weight: 700; }
+.badge.confirm { background: var(--warn-soft); color: var(--warn); }
+.badge.confirm::before { content: "!"; font-weight: 700; }
+.metas { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; min-width: 0; }
+.metas .meta { margin-top: 0; }
+.chip { font-size: 0.72rem; font-weight: 500; color: var(--fg); background: var(--bg); border-radius: 99px; padding: 1px 8px; overflow-wrap: anywhere; }
+.changes { margin: 0; display: flex; flex-direction: column; gap: 12px; }
+.changes > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.changes dt { font-size: 0.8rem; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
+.changes dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
+.badge.done.nocheck::before { content: none; }
+.badge.move { background: var(--accent); color: var(--on-accent); }
+.badge.move::before { content: "→"; font-weight: 700; }
+.badge.others { background: var(--bg); color: var(--fg); }
+.badge.others::before { content: ""; width: 6px; height: 6px; border-radius: 50%; border: 1.5px dashed currentColor; }
+.tile.row.move { box-shadow: var(--shadow); }
+.instr { font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
+.instr .when { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); font-weight: 400; }
+.row-acts { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.linkbtn:disabled { opacity: 0.5; cursor: default; }
+.act-box { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 16px calc(14px + 2.2rem + 6px); }
+.status-line .others i { background: var(--muted); }
+.digest { border-top: 1px solid var(--hair); padding-top: 28px; }
+.dg-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin-left: 4px; }
+.dg-title h2 { margin: 0; }
+.dg-sub { margin: 0; font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
+#digestList { display: flex; flex-direction: column; }
+.dg { border-bottom: 1px solid var(--hair); }
+.dg:last-child { border-bottom: 0; }
+.dg-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0 10px; align-items: start; width: 100%; text-align: left; background: none; border: 0; padding: 12px 4px; cursor: pointer; }
+.dg-head:hover .dg-area { color: var(--accent); }
+.dg-area { font-weight: 600; font-size: 0.95rem; overflow-wrap: anywhere; }
+.dg-count { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); padding-top: 3px; white-space: nowrap; }
+.dg.open .chev { transform: rotate(-135deg); margin-top: 11px; }
+.dg-items { padding: 0 4px 14px 1.5em; font-size: 0.92rem; }
+.dg-items a { color: var(--accent); text-decoration: none; }
+.dg-items a:hover { text-decoration: underline; }
+.calm.small { padding: 12px 4px; text-align: left; margin: 0; }
+@media (max-width: 560px) { .tile-body, .act-box { padding-left: 16px; padding-right: 16px; } }
+.countdown { margin: 2px 0 0; font-family: var(--mono); font-size: 0.82rem; color: var(--fg); font-variant-numeric: tabular-nums; }
+.tile { position: relative; }
+.tile.u-red::before, .tile.u-amber::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--err); }
+.tile.u-amber::before { background: var(--warn); }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.area-tag { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.chip.red { background: var(--err-soft); color: var(--err); }
+.chip.amber { background: var(--warn-soft); color: var(--warn); }
+.tk { font-family: var(--mono); font-size: 0.7rem; padding: 1px 7px; border-radius: 99px; white-space: nowrap; background: var(--bg); color: var(--muted); }
+.tk.t-done { background: var(--ok-soft); color: var(--ok); }
+.tk.t-test { background: var(--teal-soft); color: var(--teal); }
+.tk.t-prog { background: var(--accent-soft); color: var(--accent); }
+.links a.tk { text-decoration: none; }
+.links a.tk::after { content: none; }
+.fresh { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+.fresh.upd { color: var(--teal); }
+.title-wrap { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.accept.ghost { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--hair); }
+.rec-on a { color: var(--accent); }
+.sec-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.sec-head h2 { margin-bottom: 0; }
+.sort { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.sort select { font: inherit; font-size: 0.85rem; color: var(--fg); background: var(--tile); border: 1px solid var(--hair); border-radius: 8px; padding: 4px 8px; cursor: pointer; max-width: 100%; }
+/* floating send */
+.dock { position: fixed; z-index: 5; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  left: max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; pointer-events: none; }
+.dock > * { pointer-events: auto; }
+#status { background: var(--tile); color: var(--muted); box-shadow: var(--shadow); border-radius: 99px; padding: 8px 14px; font-size: 0.88rem; max-width: 100%; }
+#status.ok { color: var(--ok); } #status.err { color: var(--err); border-radius: 12px; }
+.send { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 99px; padding: 11px 20px; font-weight: 600; font-size: 0.92rem; cursor: pointer; box-shadow: var(--shadow); }
+.send:disabled { opacity: 0.55; cursor: default; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<main>
+  <header>
+    <p class="date" id="date"></p>
+    <h1 id="hello">Hello, Ben</h1>
+    <p class="countdown" id="countdown" hidden></p>
+    <p class="status-line" id="statusLine">Loading…</p>
+  </header>
+  <div class="notice" id="notice">Loading decisions…</div>
+  <section id="needSec" hidden>
+    <div class="sec-head">
+      <h2>Needs you</h2>
+      <label class="sort" for="sortSel">Sort
+        <select id="sortSel" aria-label="Sort decisions"></select>
+      </label>
+    </div>
+    <div id="tiles"></div>
+  </section>
+  <section id="agentSec" hidden>
+    <h2>Waiting on your agent</h2>
+    <div id="agentList" class="rows"></div>
+  </section>
+  <section id="othersSec" hidden>
+    <h2>Waiting on others</h2>
+    <div id="othersList" class="rows"></div>
+  </section>
+  <section id="recentSec" hidden>
+    <h2>Your recent decisions</h2>
+    <div id="recent"></div>
+  </section>
+  <section id="digestSec" class="digest" hidden>
+    <div class="dg-title"><h2>What Claude did</h2><p class="dg-sub" id="digestSub" hidden></p></div>
+    <div id="digestList"></div>
+  </section>
+</main>
+<div class="dock">
+  <span id="status" hidden></span>
+  <button class="send" id="send" type="button" hidden>Send answers</button>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let db = null, decisions = [], responses = {}, layout = null, gotD = false, gotR = false;
+const picks = {};   // id -> {choice, note}; only tiles Ben touched
+let openId = null, submitting = false, act = null; // act: {id, kind: 'reply'|'reopen', text}
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function notice(text, err) { const n = $("notice"); n.hidden = !text; n.textContent = text || ""; n.classList.toggle("err", !!err); }
+function setStatus(text, kind) { const s = $("status"); s.hidden = !text; s.textContent = text || ""; s.className = kind || ""; }
+function queuedIds() { return Object.keys(picks).filter((id) => picks[id].choice || (picks[id].note || "").trim()); }
+function pick(id) { return picks[id] || (picks[id] = { choice: null, note: "" }); }
+function strList(v) { return Array.isArray(v) ? v.filter((t) => t != null && String(t).trim()).map(String) : []; }
+function ago(at) {
+  const t = Date.parse(at); if (!at || isNaN(t)) return "";
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return "just now"; if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60); if (h < 24) return `${h} h ago`;
+  const dd = Math.round(h / 24); return dd < 7 ? `${dd} d ago` : new Date(t).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+function label(d, cid) { const c = (d.choices || []).find((c) => c.id === cid); return c ? (c.label || c.id) : null; }
+
+// Page settings: a `meta/settings` doc can override these, so the page can be cloned for a teammate.
+const DEFAULTS = { name: "Ben", title: "", cutoffAt: "2026-11-09T07:59:00Z", onsiteAt: "2026-11-15T16:00:00Z" };
+const SETTINGS = { ...DEFAULTS };
+// Last visit, for New / Updated badges. Per-viewer convenience only, so browser storage.
+const VISIT_KEY = "decisions:lastVisit";
+let prevVisit = null;
+try { const v = Number(localStorage.getItem(VISIT_KEY)); if (v > 0) prevVisit = v; } catch (e) {}
+function saveVisit() { try { localStorage.setItem(VISIT_KEY, String(Date.now())); } catch (e) {} }
+setTimeout(saveVisit, 10000);
+addEventListener("pagehide", saveVisit);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveVisit(); });
+
+function greet() {
+  const now = new Date(), h = now.getHours();
+  $("hello").textContent = `Good ${h < 12 ? "morning" : h < 18 ? "afternoon" : "evening"}, ${SETTINGS.name}`;
+  $("date").textContent = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+  document.title = SETTINGS.title || `Decisions for ${SETTINGS.name}`;
+}
+function span(ms) { const d = Math.floor(ms / 864e5), h = Math.floor((ms % 864e5) / 36e5); return d ? `${d}d ${h}h` : `${h}h ${Math.floor((ms % 36e5) / 6e4)}m`; }
+function renderCountdown() {
+  const now = Date.now(), c = Date.parse(SETTINGS.cutoffAt), o = Date.parse(SETTINGS.onsiteAt), parts = [];
+  if (!isNaN(c)) parts.push(c > now ? `Image cutoff in ${span(c - now)}` : "Image cutoff passed");
+  if (!isNaN(o)) parts.push(o > now ? `On site in ${o - now >= 864e5 ? Math.floor((o - now) / 864e5) + "d" : span(o - now)}` : "On site passed");
+  $("countdown").textContent = parts.join(" · "); $("countdown").hidden = !parts.length;
+}
+greet(); renderCountdown();
+
+function urgency(d) {
+  const t = Date.parse(d.due); if (!d.due || isNaN(t)) return "";
+  const c = Date.parse(SETTINGS.cutoffAt), now = Date.now();
+  if (t <= now || (!isNaN(c) && t <= c)) return "red";
+  return t - now <= 3 * 864e5 ? "amber" : "";
+}
+function dueText(d) { const t = Date.parse(d.due); return d.due && !isNaN(t) ? new Date(t).toLocaleDateString([], { month: "short", day: "numeric" }) : "No deadline"; }
+function ticketTone(s) { s = String(s || "").trim().toLowerCase(); return s === "done" ? "t-done" : s === "in testing" ? "t-test" : s === "in progress" ? "t-prog" : "t-back"; }
+function tickets(d) { return Array.isArray(d.tickets) ? d.tickets.filter((t) => t && t.id) : []; }
+function ticketText(t) { return `${t.id}${t.status ? " · " + t.status : ""}`; }
+function freshness(d) {
+  if (!prevVisit) return null; // first visit: everything would be "new"
+  if (Date.parse(d.createdAt) > prevVisit) return ["new", "New"];
+  if (Date.parse(d.changedAt) > prevVisit) return ["upd", "Updated"];
+  return null;
+}
+
+const sending = new Set();   // ids with a write in flight
+let editId = null;           // pending decision whose answer Ben is changing
+
+function titleOf(id) { const d = decisions.find((x) => x.id === id); return (d && (d.title || d.id)) || id; }
+function whyFailed(e) {
+  if (e && e.code === "done") return e.message;
+  return e && e.code === "invalid_argument" ? "Only the page owner can send answers." : (e && e.message) || "The save failed.";
+}
+
+function refreshDock() {
+  const n = queuedIds().filter((id) => !sending.has(id)).length, b = $("send");
+  b.hidden = !db || (n === 0 && !submitting);
+  b.disabled = submitting;
+  b.textContent = submitting ? "Sending…" : `Send ${n} answer${n === 1 ? "" : "s"}`;
+}
+
+function sendBtn(d, id, text) {
+  const busy = sending.has(d.id), b = el("button", "send-one", busy ? "Sending…" : text);
+  b.type = "button"; b.id = id; b.disabled = !db || busy || !queuedIds().includes(d.id);
+  b.onclick = () => sendOne(d.id);
+  return b;
+}
+
+function tileFoot(d) {
+  const p = picks[d.id] || {}, foot = el("div", "tile-foot");
+  const queued = queuedIds().includes(d.id), hasRec = d.recommended && label(d, d.recommended);
+  if (queued) foot.append(el("span", "picked", p.choice ? label(d, p.choice) || p.choice : "Note added"));
+  else if (hasRec) {
+    const r = el("span", "rec-line", "Recommended: "); r.append(el("b", null, label(d, d.recommended))); foot.append(r);
+  } else foot.append(el("span", "rec-line", "Open to see the options"));
+  const acts = el("span", "acts");
+  if (hasRec && !sending.has(d.id)) {
+    const isRec = p.choice === d.recommended;
+    const a = el("button", "accept" + (isRec ? " undo" : ""), isRec ? "Undo" : "Accept recommended");
+    a.type = "button"; a.id = `a-${d.id}`;
+    a.onclick = () => { const cur = pick(d.id); cur.choice = isRec ? null : d.recommended; setStatus(""); render(); };
+    acts.append(a);
+  }
+  if (!sending.has(d.id)) {
+    const on = !!(act && act.id === d.id && act.kind === "info");
+    const m = el("button", "accept ghost", on ? "Cancel" : "Need more info"); m.type = "button"; m.id = `mi-${d.id}`;
+    m.setAttribute("aria-expanded", String(on));
+    m.onclick = () => { if (editId) { delete picks[editId]; editId = null; } act = on ? null : { id: d.id, kind: "info", text: "" }; setStatus(""); render(); };
+    acts.append(m);
+  }
+  if (queued) acts.append(sendBtn(d, `s-${d.id}`, "Send"));
+  if (acts.childElementCount) foot.append(acts);
+  return foot;
+}
+
+function section(title, ...kids) { const b = el("div", "block"); b.append(el("h3", null, title), ...kids); return b; }
+function bullets(list, cls) { const ul = el("ul", "pts" + (cls ? " " + cls : "")); for (const t of list) ul.append(el("li", null, t)); return ul; }
+
+function tileBody(d) {
+  const p = picks[d.id] || {}, body = el("div", "tile-body"); body.id = `b-${d.id}`;
+  // an open tile already shows `what` in its header; rows (Change answer) don't
+  if (d.what && !isOpenD(d)) body.append(section("What's being decided", el("p", "ctx", String(d.what))));
+  const bg = strList(d.background); if (bg.length) body.append(section("Background", bullets(bg)));
+  if (d.when) body.append(section("When", el("p", "ctx", String(d.when))));
+  const changes = Array.isArray(d.changes) ? d.changes.filter((c) => c && c.effect) : [];
+  if (changes.length) {
+    const dl = el("dl", "changes");
+    for (const c of changes) { const g = el("div"); g.append(el("dt", null, label(d, c.choice) || String(c.choice || "")), el("dd", null, String(c.effect))); dl.append(g); }
+    body.append(section("What changes", dl));
+  }
+  if (d.ifNoDecision) body.append(section("If you don't decide", el("p", "ctx", String(d.ifNoDecision))));
+  if (Array.isArray(d.points) && d.points.length) body.append(bullets(strList(d.points)));
+  else if (d.context && !d.what) body.append(el("p", "ctx", String(d.context)));
+  const risks = strList(d.risks);
+  body.append(section(risks.length ? `Risks · ${risks.length}` : "Risks", risks.length ? bullets(risks, "risks") : el("p", "none", "None known")));
+  {
+    const ls = el("div", "links");
+    for (const t of tickets(d)) {
+      if (!/^https:\/\//.test(t.url || "")) continue; // shared data is untrusted
+      const a = el("a", "tk " + ticketTone(t.status), ticketText(t)); a.href = t.url; a.target = "_blank"; a.rel = "noopener"; ls.append(a);
+    }
+    for (const l of (Array.isArray(d.links) ? d.links : [])) {
+      if (!l || !/^https:\/\//.test(l.url || "")) continue; // shared data is untrusted
+      const a = el("a", null, l.label || l.url); a.href = l.url; a.target = "_blank"; a.rel = "noopener"; ls.append(a);
+    }
+    if (ls.childElementCount) body.append(ls);
+  }
+  const checked = Array.isArray(d.checked) ? d.checked.filter((c) => c && c.source) : [], ck = el("div", "block");
+  ck.append(el("h3", null, "Context checked"));
+  if (checked.length) for (const c of checked) {
+    const line = el("p", "chk", `✓ ${c.source}`); const when = ago(c.at); if (when) line.append(` · ${when}`);
+    if (c.note) line.append(el("span", "chk-note", ` · ${c.note}`));
+    ck.append(line);
+  } else ck.append(el("p", "unconfirmed", "Sources not confirmed"));
+  body.append(ck);
+  const group = el("div", "choices"); group.setAttribute("role", "radiogroup"); group.setAttribute("aria-label", d.title || d.id);
+  for (const c of d.choices || []) {
+    const isRec = d.recommended && d.recommended === c.id;
+    const b = el("button", "choice"); b.type = "button"; b.setAttribute("role", "radio"); b.id = `c-${d.id}-${c.id}`;
+    b.setAttribute("aria-checked", String(p.choice === c.id));
+    const row = el("span", "row"); row.append(el("span", null, c.label || c.id));
+    if (isRec) row.append(el("span", "tag", "Recommended"));
+    b.append(el("span", "dot"), row);
+    const why = c.why || c.detail;
+    if (why) {
+      const w = el("span", "why" + (isRec ? " is-rec" : ""));
+      if (d.recommended) w.append(el("b", null, isRec ? "Why: " : "Why not: "));
+      w.append(String(why)); b.append(w);
+    }
+    b.onclick = () => { const cur = pick(d.id); cur.choice = cur.choice === c.id ? null : c.id; setStatus(""); render(); };
+    group.append(b);
+  }
+  if (group.childElementCount) body.append(group);
+  const lab = el("label", "note"); lab.htmlFor = `n-${d.id}`; lab.append("Or tell me something else");
+  const ta = el("textarea"); ta.id = `n-${d.id}`; ta.rows = 2; ta.value = p.note || "";
+  ta.oninput = () => {
+    const wasQueued = queuedIds().includes(d.id);
+    pick(d.id).note = ta.value; setStatus("");
+    if (wasQueued !== queuedIds().includes(d.id)) render(); else refreshDock();
+  };
+  lab.append(ta); body.append(lab);
+  const bs = el("div", "body-send"); bs.append(sendBtn(d, `sb-${d.id}`, d.status === "answered" ? "Resend answer" : "Send this answer")); body.append(bs);
+  return body;
+}
+
+function isOpenD(d) { return (d.status || "open") === "open"; }
+// Which group an item joins on load: open and followup need Ben, answered waits on the agent, waiting is blocked on others.
+function groupOf(d) {
+  const s = d.status || "open";
+  return s === "open" || s === "followup" ? "need" : s === "waiting" ? "others" : s === "done" ? "recent" : "agent";
+}
+function statusOf(d) {
+  if (d.status === "done") return ["done", "Done"];
+  if (d.status === "followup") return ["move", "Your move"];
+  if (d.status === "waiting") return ["others", "Waiting on others"];
+  if (d.agentNote && /^needs your confirm/i.test(String(d.agentNote).trim())) return ["confirm", "Needs your confirm"];
+  return d.agentNote ? ["prog", "In progress"] : ["sent", "Sent"];
+}
+
+function renderTile(d) {
+  const isOpen = openId === d.id, u = urgency(d), tile = el("article", "tile" + (isOpen ? " open" : "") + (u ? " u-" + u : ""));
+  tile.dataset.id = d.id; tile.tabIndex = -1;
+  const head = el("button", "tile-head"); head.type = "button"; head.id = `h-${d.id}`;
+  head.setAttribute("aria-expanded", String(isOpen)); head.setAttribute("aria-controls", `b-${d.id}`);
+  const tt = el("span", "tt"); tt.append(el("span", "title", d.title || d.id));
+  if (d.what || d.summary) tt.append(el("span", "sum clamp", String(d.what || d.summary)));
+  const meta = el("span", "metas");
+  if (d.area) meta.append(el("span", "area-tag", String(d.area)));
+  meta.append(el("span", "chip" + (u ? " " + u : ""), dueText(d)));
+  for (const t of tickets(d)) meta.append(el("span", "tk " + ticketTone(t.status), ticketText(t)));
+  const fr = freshness(d); if (fr) meta.append(el("span", "fresh " + fr[0], fr[1]));
+  tt.append(meta);
+  head.append(el("span", "num", d.order != null ? String(d.order).padStart(2, "0") : ""), tt, el("span", "chev"));
+  head.onclick = () => { openId = isOpen ? null : d.id; closeEditors(); render(); };
+  tile.append(head, tileFoot(d));
+  if (act && act.id === d.id && act.kind === "info") tile.append(actBox(d, "info"));
+  if (isOpen) tile.append(tileBody(d));
+  return tile;
+}
+function closeEditors() { if (editId) { delete picks[editId]; editId = null; } act = null; }
+
+function answerText(d) {
+  const r = responses[d.id]; if (!r) return "No answer recorded";
+  const parts = []; const l = label(d, r.choice); if (l) parts.push(l); if (r.note) parts.push(`"${r.note}"`);
+  return parts.join(" · ") || "No answer recorded";
+}
+function agentLine(d, cls, prefix) {
+  if (!d.agentNote) return null;
+  const a = el("span", cls || "agent", (prefix ?? "Agent: ") + String(d.agentNote)); const w = ago(d.agentAt);
+  if (w) a.append(el("span", "when", ` · ${w}`));
+  return a;
+}
+
+// Any item that isn't open, as a compact row with its true status. Rows stay where they were rendered.
+function renderRow(d, inRecent) {
+  const editing = editId === d.id, acting = act && act.id === d.id ? act.kind : null, busy = sending.has(d.id);
+  const r = responses[d.id], [st, stText] = statusOf(d);
+  const u = d.status === "followup" ? urgency(d) : "";
+  const row = el("article", "tile row " + st + (editing || acting ? " open" : "") + (u ? " u-" + u : ""));
+  row.dataset.id = d.id; row.tabIndex = -1;
+  const head = el("div", "row-head"), tt = el("div", "tt");
+  const top = el("div", "row-top");
+  const tw = el("span", "title-wrap"); tw.append(el("span", "title", d.title || d.id));
+  const fr = freshness(d); if (fr) tw.append(el("span", "fresh " + fr[0], fr[1]));
+  top.append(tw, el("span", "badge " + st + (st === "done" && !inRecent ? " nocheck" : ""), stText));
+  tt.append(top);
+  if (d.status === "followup") { const ins = agentLine(d, "instr", ""); if (ins) tt.append(ins); }
+  if (r) {
+    const ans = el("span", "pend-ans", "Your answer: "); ans.append(el("b", null, answerText(d))); tt.append(ans);
+    const sent = ago(r.submittedAt); tt.append(el("span", "pend-meta", sent ? `Sent ${sent}` : "Sent"));
+  }
+  if (d.status !== "followup") { const ag = agentLine(d); if (ag) tt.append(ag); }
+  const tn = d.ticketNote;
+  if ((d.status === "done" || d.status === "waiting") && tn && (tn.label || tn.url)) {
+    const line = el("span", "pend-meta rec-on", "Recorded on ");
+    if (/^https:\/\//.test(tn.url || "")) { const a = el("a", null, String(tn.label || tn.url)); a.href = tn.url; a.target = "_blank"; a.rel = "noopener"; line.append(a); } // shared data is untrusted
+    else line.append(String(tn.label));
+    tt.append(line);
+  }
+  head.append(el("span", "num", d.order != null ? String(d.order).padStart(2, "0") : ""), tt);
+  row.append(head);
+
+  const foot = el("div", "tile-foot"), links = el("span", "row-acts");
+  const link = (kind, text, id) => {
+    const on = kind === "change" ? editing : acting === kind;
+    const b = el("button", "linkbtn", on ? "Cancel" : text); b.type = "button"; b.id = id; b.disabled = busy;
+    b.setAttribute("aria-expanded", String(on));
+    b.onclick = () => {
+      const wasOn = on; closeEditors();
+      if (!wasOn) {
+        openId = null;
+        if (kind === "change") { editId = d.id; picks[d.id] = { choice: (r && r.choice) || null, note: (r && r.note) || "" }; }
+        else act = { id: d.id, kind, text: "" };
+      }
+      setStatus(""); render();
+    };
+    return b;
+  };
+  if (d.status === "answered") links.append(link("change", "Change answer", `e-${d.id}`));
+  links.append(link("reply", "Reply", `ry-${d.id}`), link("reopen", "Reopen", `ro-${d.id}`));
+  foot.append(links); row.append(foot);
+  if (editing) row.append(tileBody(d));
+  if (acting) row.append(actBox(d, acting));
+  return row;
+}
+
+function actBox(d, kind) {
+  const busy = sending.has(d.id), box = el("div", "act-box");
+  const lab = el("label", "note"); lab.htmlFor = `r-${d.id}`;
+  lab.append(kind === "reopen" ? "Anything to add? (optional)" : kind === "info" ? "What do you need to know? (optional)" : "Your reply to the agent");
+  const ta = el("textarea"); ta.id = `r-${d.id}`; ta.rows = 2; ta.value = act.text || "";
+  const go = el("button", "send-one", busy ? "Sending…" : kind === "reopen" ? "Reopen" : kind === "info" ? "Ask for more info" : "Send reply");
+  go.type = "button"; go.id = `xs-${d.id}`;
+  go.disabled = !db || busy || (kind === "reply" && !(act.text || "").trim());
+  ta.oninput = () => { act.text = ta.value; if (kind === "reply") go.disabled = !db || sending.has(d.id) || !ta.value.trim(); };
+  go.onclick = () => doAct(d.id, kind);
+  lab.append(ta);
+  const btns = el("div", "body-send"); btns.append(go);
+  box.append(lab, btns);
+  return box;
+}
+
+// Scroll anchoring: whatever item is focused, or the topmost visible one, keeps its screen position across re-renders.
+function captureAnchor() {
+  const f = document.activeElement, inItem = f && f.closest ? f.closest("[data-id]") : null;
+  const item = inItem || [...document.querySelectorAll("main [data-id]")].find((e) => e.getBoundingClientRect().bottom > 0);
+  return { fid: f && f.id, sel: f && f.selectionStart, key: item && item.dataset.id, top: item ? item.getBoundingClientRect().top : 0, focusIn: !!inItem };
+}
+function restoreAnchor(a) {
+  const item = a.key && document.querySelector(`[data-id="${CSS.escape(a.key)}"]`);
+  if (item) { const dy = item.getBoundingClientRect().top - a.top; if (Math.abs(dy) > 0.5) window.scrollBy(0, dy); }
+  const f = a.fid && $(a.fid);
+  if (f) { f.focus({ preventScroll: true }); if (a.sel != null && f.setSelectionRange) f.setSelectionRange(a.sel, a.sel); }
+  else if (a.focusIn && item) item.focus({ preventScroll: true });
+}
+
+const GROUPS = [["need", "tiles", "needSec"], ["agent", "agentList", "agentSec"], ["others", "othersList", "othersSec"], ["recent", "recent", "recentSec"]];
+// Sorting. Applied on load and when Ben changes the control; live data never reorders mid-visit.
+const SORTS = { urgency: "Urgency", newest: "Newest", updated: "Recently updated", deadline: "Deadline", area: "Area", number: "Number" };
+let sortMode = "urgency";
+try { const v = localStorage.getItem("decisions:sort"); if (v && SORTS[v]) sortMode = v; } catch (e) {}
+const tsOf = (v) => { const t = Date.parse(v); return v && !isNaN(t) ? t : NaN; };
+const asc = (x, y) => (isNaN(x) && isNaN(y) ? 0 : isNaN(x) ? 1 : isNaN(y) ? -1 : x - y);   // missing last
+const desc = (x, y) => (isNaN(x) && isNaN(y) ? 0 : isNaN(x) ? 1 : isNaN(y) ? -1 : y - x);  // missing last
+const byOrder = (a, b) => asc(a.order ?? NaN, b.order ?? NaN);
+const byUrgency = (a, b) => ((a.status === "followup" ? 0 : 1) - (b.status === "followup" ? 0 : 1)) || asc(tsOf(a.due), tsOf(b.due)) || byOrder(a, b);
+const touched = (d) => Math.max(...[d.changedAt, d.agentAt, d.createdAt].map(tsOf).filter((t) => !isNaN(t)), -Infinity);
+const COMPARE = {
+  newest: (a, b) => desc(tsOf(a.createdAt), tsOf(b.createdAt)) || byOrder(a, b),
+  updated: (a, b) => desc(touched(a) === -Infinity ? NaN : touched(a), touched(b) === -Infinity ? NaN : touched(b)) || byOrder(a, b),
+  deadline: (a, b) => asc(tsOf(a.due), tsOf(b.due)) || byOrder(a, b),
+  area: (a, b) => ((a.area ? 0 : 1) - (b.area ? 0 : 1)) || String(a.area || "").localeCompare(String(b.area || "")) || byUrgency(a, b),
+  number: byOrder,
+};
+function orderIds(g, ds) {
+  let cmp = COMPARE[sortMode];
+  if (!cmp) cmp = g === "need" ? byUrgency : (a, b) => desc(tsOf((responses[a.id] || {}).submittedAt || a.agentAt || a.createdAt), tsOf((responses[b.id] || {}).submittedAt || b.agentAt || b.createdAt));
+  return [...ds].sort(cmp).map((d) => d.id);
+}
+function setSort(mode) {
+  if (!SORTS[mode]) return;
+  sortMode = mode;
+  try { localStorage.setItem("decisions:sort", mode); } catch (e) {}
+  if (layout) {
+    const byId = new Map(decisions.map((d) => [d.id, d]));
+    for (const g of Object.keys(layout)) layout[g] = orderIds(g, layout[g].map((id) => byId.get(id)).filter(Boolean));
+    render();
+  }
+}
+
+{
+  const sel = $("sortSel");
+  for (const [k, v] of Object.entries(SORTS)) { const o = el("option", null, v); o.value = k; sel.append(o); }
+  sel.value = sortMode;
+  sel.onchange = () => setSort(sel.value);
+}
+
+function render() {
+  const byId = new Map(decisions.map((d) => [d.id, d]));
+  // Grouping happens once, when both collections first load; later changes update items in place.
+  if (!layout && gotD && gotR) {
+    const of = (g) => decisions.filter((d) => groupOf(d) === g);
+    layout = {
+      need: orderIds("need", of("need")),
+      agent: orderIds("agent", of("agent")),
+      others: orderIds("others", of("others")),
+      recent: orderIds("recent", of("recent")),
+    };
+  }
+  if (!layout) return;
+  const placed = new Set(Object.values(layout).flat());
+  for (const d of decisions) if (!placed.has(d.id)) layout[groupOf(d)].push(d.id);
+  if (editId && (byId.get(editId) || {}).status !== "answered") { if (!sending.has(editId)) delete picks[editId]; editId = null; }
+  if (act && !byId.has(act.id)) act = null;
+
+  const count = (s) => decisions.filter((d) => (d.status || "open") === s).length;
+  const nOpen = count("open"), nMove = count("followup");
+  const sl = $("statusLine"); sl.replaceChildren();
+  for (const [cls, n, word] of [["need", nOpen + nMove, "need you" + (nMove ? ` (incl. ${nMove} your move)` : "")], ["prog", count("answered"), "waiting on your agent"], ["others", count("waiting"), "waiting on others"], ["done", count("done"), "done"]]) {
+    const s = el("span", cls); s.append(el("i"), el("b", null, String(n)), " " + word); sl.append(s);
+  }
+
+  const anchor = captureAnchor();
+  for (const [g, listId, secId] of GROUPS) {
+    const els = layout[g].map((id) => { const d = byId.get(id); return d ? (isOpenD(d) ? renderTile(d) : renderRow(d, g === "recent")) : null; }).filter(Boolean);
+    if (g === "need") {
+      $(secId).hidden = !decisions.length;
+      if (!els.length) { const c = el("div", "calm"); c.append(el("strong", null, "You're all caught up"), "Nothing needs your call right now."); els.push(c); }
+    } else $(secId).hidden = !els.length;
+    $(listId).replaceChildren(...els);
+  }
+  restoreAnchor(anchor);
+
+  if (!decisions.length) notice("No decisions yet. When your agent adds one, it shows up here on its own.");
+  else notice("");
+  refreshDock();
+}
+
+// Reopen: a response noting it, then status open. Reply: a new note keeping the previous choice, then status answered.
+async function doAct(id, kind) {
+  const d = decisions.find((x) => x.id === id);
+  if (!db || !d || sending.has(id) || !act || act.id !== id) return;
+  const text = (act.text || "").trim(); if (kind === "reply" && !text) return;
+  const r = responses[id] || {}, title = titleOf(id), now = new Date().toISOString();
+  sending.add(id); setStatus(""); render();
+  try {
+    if (kind === "reopen") {
+      await db.doc("responses/" + id).set({ choice: null, note: text ? `Reopened by Ben: ${text}` : "Reopened by Ben", submittedAt: now });
+      await db.doc("decisions/" + id).update({ status: "open" });
+      toast(`Reopened "${title}".`);
+    } else if (kind === "info") {
+      await db.doc("responses/" + id).set({ choice: null, note: text ? `Need more info: ${text}` : "Need more info", submittedAt: now });
+      if (d.status !== "answered") await db.doc("decisions/" + id).update({ status: "answered" });
+      delete picks[id]; if (openId === id) openId = null;
+      toast(`Asked for more info on "${title}".`);
+    } else {
+      await db.doc("responses/" + id).set({ choice: r.choice || null, note: text, submittedAt: now });
+      if (d.status !== "answered") await db.doc("decisions/" + id).update({ status: "answered" });
+      toast(`Sent your reply on "${title}".`);
+    }
+    if (act && act.id === id) act = null;
+  } catch (e) {
+    setStatus(`Couldn't ${kind === "reopen" ? "reopen" : kind === "info" ? "ask about" : "reply on"} "${title}". ${whyFailed(e)} Try again.`, "err");
+  } finally { sending.delete(id); render(); }
+}
+
+// Writes one answer: the response doc first, then the decision status. Done items are never rewritten.
+async function writeAnswer(id) {
+  const p = picks[id], d = decisions.find((x) => x.id === id);
+  if (!d || d.status === "done") throw { code: "done", message: "Your agent already finished this one, so it can't be changed." };
+  await db.doc("responses/" + id).set({ choice: p.choice || null, note: (p.note || "").trim(), submittedAt: new Date().toISOString() });
+  if (d.status !== "answered") await db.doc("decisions/" + id).update({ status: "answered" });
+  delete picks[id];
+  if (openId === id) openId = null;
+  if (editId === id) editId = null;
+}
+
+function toast(text) { setStatus(text, "ok"); setTimeout(() => { if ($("status").className === "ok" && $("status").textContent === text) setStatus(""); }, 5000); }
+
+async function sendOne(id) {
+  if (!db || sending.has(id) || !queuedIds().includes(id)) return;
+  const title = titleOf(id), resend = (decisions.find((x) => x.id === id) || {}).status === "answered";
+  sending.add(id); setStatus(""); render();
+  try { await writeAnswer(id); toast(resend ? `Updated your answer on "${title}".` : `Sent "${title}".`); }
+  catch (e) { setStatus(`Couldn't send "${title}". ${whyFailed(e)} Try again.`, "err"); }
+  finally { sending.delete(id); render(); }
+}
+
+async function submit() {
+  const ids = queuedIds().filter((id) => !sending.has(id)); if (!ids.length || !db || submitting) return;
+  submitting = true; for (const id of ids) sending.add(id); setStatus(""); render();
+  const done = [];
+  try {
+    for (const id of ids) { await writeAnswer(id); done.push(id); sending.delete(id); }
+    toast(`Sent ${done.length} answer${done.length > 1 ? "s" : ""}.`);
+  } catch (e) {
+    setStatus(`Saved ${done.length} of ${ids.length}. ${whyFailed(e)} Try again.`, "err");
+  } finally { for (const id of ids) sending.delete(id); submitting = false; render(); }
+}
+// "What Claude did": read-only, lives below every decision group and re-renders only itself.
+let digest = [], digestErr = null;
+const digestOpen = new Set();
+function renderDigest() {
+  const sec = $("digestSec"); sec.hidden = false;
+  const withPeriod = digest.find((g) => g.period);
+  const stamps = digest.map((g) => Date.parse(g.updatedAt)).filter((t) => !isNaN(t));
+  const sub = [withPeriod ? String(withPeriod.period) : "", stamps.length ? `Updated ${ago(new Date(Math.max(...stamps)).toISOString())}` : ""].filter(Boolean).join(" · ");
+  $("digestSub").textContent = sub; $("digestSub").hidden = !sub;
+  const f = document.activeElement, fid = f && f.id;
+  const list = $("digestList");
+  if (digestErr) { list.replaceChildren(el("p", "calm small", `Couldn't load this log (${digestErr}). Reload the page to try again.`)); return; }
+  if (!digest.length) { list.replaceChildren(el("p", "calm small", "Nothing logged yet")); return; }
+  list.replaceChildren(...digest.map((g) => {
+    const open = digestOpen.has(g.id), items = Array.isArray(g.items) ? g.items.filter((i) => i && i.text) : [];
+    const wrap = el("div", "dg" + (open ? " open" : ""));
+    const b = el("button", "dg-head"); b.type = "button"; b.id = `dg-${g.id}`;
+    b.setAttribute("aria-expanded", String(open)); b.setAttribute("aria-controls", `dgb-${g.id}`);
+    const tt = el("span", "tt"); tt.append(el("span", "dg-area", String(g.area || g.id)));
+    if (g.headline) tt.append(el("span", "sum", String(g.headline)));
+    b.append(tt, el("span", "dg-count", `${items.length} item${items.length === 1 ? "" : "s"}`), el("span", "chev"));
+    b.onclick = () => { open ? digestOpen.delete(g.id) : digestOpen.add(g.id); renderDigest(); };
+    wrap.append(b);
+    if (open) {
+      const ul = el("ul", "pts dg-items"); ul.id = `dgb-${g.id}`;
+      for (const it of items) {
+        const li = el("li");
+        if (/^https:\/\//.test(it.url || "")) { const a = el("a", null, String(it.text)); a.href = it.url; a.target = "_blank"; a.rel = "noopener"; li.append(a); } // shared data is untrusted
+        else li.append(String(it.text));
+        ul.append(li);
+      }
+      if (!items.length) ul.append(el("li", null, "No items"));
+      wrap.append(ul);
+    }
+    return wrap;
+  }));
+  if (fid && fid.startsWith("dg-") && $(fid)) $(fid).focus({ preventScroll: true });
+}
+$("send").onclick = submit;
+setInterval(() => { greet(); renderCountdown(); render(); if (db) renderDigest(); }, 60000); // keeps the relative times fresh
+
+(async () => {
+  db = await window.claude?.use?.("db").catch(() => null) ?? null;
+  if (!db) { notice("Decisions can't load here. This page needs its data store, which is only available when you open it on claude.ai while signed in.", true); $("statusLine").textContent = "Unavailable"; return; }
+  const timer = setTimeout(() => notice(decisions.length ? "Can't reach the data store right now. What you see may be out of date." : "Can't reach the data store yet. Check your connection; this page will keep trying.", true), 10000);
+  db.collection("decisions").orderBy("order").onSnapshot((snap) => {
+    if (!snap.metadata.fromCache) clearTimeout(timer);
+    decisions = snap.docs.map((d) => ({ ...d.data(), id: d.id })); gotD = true;
+    render();
+  }, (e) => { clearTimeout(timer); db = null; notice(`Lost the connection to the data store (${e.code}). Reload the page to try again.`, true); refreshDock(); });
+  db.doc("meta/settings").onSnapshot((snap) => {
+    const v = (snap.exists && snap.data()) || {};
+    for (const k of Object.keys(DEFAULTS)) SETTINGS[k] = typeof v[k] === "string" && v[k].trim() ? v[k].trim() : DEFAULTS[k];
+    greet(); renderCountdown(); render();
+  }, () => {});
+  renderDigest();
+  db.collection("digest").orderBy("order").onSnapshot((snap) => {
+    digest = snap.docs.map((d) => ({ ...d.data(), id: d.id })); digestErr = null; renderDigest();
+  }, (e) => { digestErr = (e && e.code) || "error"; renderDigest(); });
+  db.collection("responses").onSnapshot((snap) => {
+    responses = {}; for (const d of snap.docs) responses[d.id] = d.data(); gotR = true;
+    render();
+  }, () => { gotR = true; render(); });
+})();
+</script>
