@@ -900,6 +900,10 @@ function render() {
   if (!layout) return;
   const placed = new Set(Object.values(layout).flat());
   for (const d of decisions) if (!placed.has(d.id)) layout[groupOf(d)].push(d.id);
+  // Items stay put while you look, except one that comes back to you: it moves up into "Needs you" at once.
+  for (const g of ["agent", "others", "recent"]) for (const id of layout[g].filter((id) => byId.has(id) && groupOf(byId.get(id)) === "need")) {
+    layout[g] = layout[g].filter((x) => x !== id); layout.need.unshift(id);
+  }
   if (editId && (byId.get(editId) || {}).status !== "answered") { if (!sending.has(editId)) delete picks[editId]; editId = null; }
   if (act && !byId.has(act.id)) act = null;
 
