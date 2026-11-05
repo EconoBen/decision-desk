@@ -48,6 +48,14 @@ h1 { font-family: var(--display); font-size: clamp(1.9rem, 6vw, 2.5rem); font-we
 .status-line b, .countdown b { color: var(--ink); font-weight: 600; }
 .countdown { margin: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.93rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .countdown .passed b { color: var(--faint); font-weight: 500; }
+/* "Text me": only when served by local/server.py */
+.sms-btn { margin-left: auto; }
+.sms-btn[hidden], .sms[hidden] { display: none; }
+.sms { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 14px; padding: 14px 16px; border-radius: var(--r-md); background: var(--surface); box-shadow: var(--sh-1); font-size: 0.9rem; color: var(--muted); }
+.sms-say { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.sms-say.err { color: var(--err); }
+.sms input { font: inherit; font-size: 0.92rem; color: var(--ink); background: var(--sunken); border: 0; border-radius: 99px; padding: 7px 14px; width: 15em; max-width: 100%; }
+.sms input::placeholder { color: var(--faint); }
 
 /* sections */
 section { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -276,7 +284,9 @@ textarea::placeholder { color: var(--faint); }
     <div class="hud">
       <p class="status-line" id="statusLine">Loading…</p>
       <p class="countdown" id="countdown" hidden></p>
+      <button class="linkbtn sms-btn" id="smsBtn" type="button" aria-controls="smsBox" aria-expanded="false" hidden>Text me</button>
     </div>
+    <div class="sms" id="smsBox" hidden></div>
   </header>
   <div class="notice" id="notice">Loading decisions…</div>
   <section id="needSec" hidden>
@@ -1020,6 +1030,50 @@ function renderDigest() {
   }));
   if (fid && fid.startsWith("dg-") && $(fid)) $(fid).focus({ preventScroll: true });
 }
+// "Text me": connect a phone to the desk's text-message line. Only on the local server (local/server.py), never in the artifact.
+const sms = { open: false, st: null, err: "", busy: false, again: false };
+async function smsCall(path, body) {
+  const r = await fetch("/sms/" + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
+  const v = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(v.error || "That didn't work. Try again.");
+  return v;
+}
+async function smsDo(path, body) {
+  if (sms.busy) return; sms.busy = true; sms.err = ""; renderSms();
+  try { await smsCall(path, body); sms.again = false; sms.st = await smsCall("status"); }
+  catch (e) { sms.err = e.message; }
+  finally { sms.busy = false; renderSms(); }
+}
+function smsButton(text, cls, fn) { const b = el("button", cls, sms.busy && cls === "accept" ? "Sending…" : text); b.type = "button"; b.disabled = sms.busy; b.onclick = fn; return b; }
+function smsInput(placeholder, label, attrs, go) {
+  const i = Object.assign(el("input"), { placeholder, ...attrs }); i.setAttribute("aria-label", label);
+  i.onkeydown = (e) => { if (e.key === "Enter") go(); };
+  return i;
+}
+function renderSms() {
+  const st = sms.st, b = $("smsBtn"), box = $("smsBox");
+  b.hidden = !st; box.hidden = !st || !sms.open;
+  if (!st) return;
+  b.textContent = st.verified ? "Texting on" : "Text me"; b.setAttribute("aria-expanded", String(sms.open));
+  if (!sms.open) return;
+  const kids = [];
+  if (!st.configured) kids.push(el("p", "sms-say", "Texting isn't set up on this desk yet. The README's text-message section shows how."));
+  else if (st.verified) kids.push(el("p", "sms-say", `Decisions that need you are texted to the number ending ${st.last4}. Reply to a text to answer it.`), smsButton("Disconnect", "linkbtn", () => smsDo("disconnect", {})));
+  else if (st.codeSent && !sms.again) {
+    const go = () => smsDo("verify", { code: code.value });
+    const code = smsInput("6-digit code", "Code from the text", { type: "text", inputMode: "numeric", autocomplete: "one-time-code", maxLength: 6 }, go);
+    kids.push(el("p", "sms-say", "We sent you a code. Enter it to finish."), code, smsButton("Verify", "accept", go), smsButton("Use another number", "linkbtn", () => { sms.again = true; sms.err = ""; renderSms(); }));
+  } else {
+    const go = () => smsDo("connect", { phone: phone.value });
+    const phone = smsInput("Phone, with country code", "Your phone number", { type: "tel", autocomplete: "tel" }, go);
+    kids.push(el("p", "sms-say", "Get a text when a decision needs you, and answer by replying."), phone, smsButton("Connect", "accept", go));
+  }
+  if (sms.err) kids.push(el("p", "sms-say err", sms.err));
+  box.replaceChildren(...kids);
+}
+$("smsBtn").onclick = () => { sms.open = !sms.open; sms.err = ""; renderSms(); };
+if (window.claude?.local) smsCall("status").then((v) => { sms.st = v; renderSms(); }).catch(() => {});
+
 $("send").onclick = submit;
 setInterval(() => { greet(); renderCountdown(); render(); if (db) renderDigest(); }, 60000); // keeps the relative times fresh
 
