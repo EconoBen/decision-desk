@@ -30,6 +30,7 @@ Your agent has to publish its own copy, so the page belongs to you. Only the pag
 - `checked`: [{source, at, note}], the sources the agent re-read before writing it
 - `tickets`: [{id, status, url}], live ticket chips
 - `links`: [{label, url}]
+- `command`: a shell block Ben runs himself; shown with a Copy button. A `background` or `points` bullet starting "Command: " is shown the same way, and is skipped when `command` is set
 - `status`: open, answered, waiting, followup or done
 - `agentNote`, `agentAt`, `changedAt`, `ticketNote` {label, url}
 - `order`, `createdAt`

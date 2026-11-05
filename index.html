@@ -218,6 +218,11 @@ code { font-family: var(--mono); font-size: 0.86em; background: var(--bg); borde
 .trail { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
 .trail .when { font-family: var(--mono); font-size: 0.74rem; color: var(--faint); }
 .trail b { color: var(--fg); font-weight: 500; }
+.cmd { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; }
+.cmd-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cmd pre { margin: 0; background: var(--bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; max-width: 100%; }
+.cmd pre code { background: none; padding: 0; font-size: 0.84rem; line-height: 1.5; white-space: pre; overflow-wrap: normal; }
+.pts li.cmd-li { list-style: none; margin-left: -1.1em; }
 /* floating send */
 .dock { position: fixed; z-index: 5; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   left: max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; pointer-events: none; }
@@ -452,25 +457,51 @@ function traceBlock(d) {
 }
 
 function section(title, ...kids) { const b = el("div", "block"); b.append(el("h3", null, title), ...kids); return b; }
-function bullets(list, cls) { const ul = el("ul", "pts" + (cls ? " " + cls : "")); for (const t of list) ul.append(el("li", null, t)); return ul; }
+// A command Ben runs himself: exact text in a code block with a Copy button (textContent only, never HTML).
+function cmdBlock(text, id) {
+  const box = el("div", "cmd"), head = el("div", "cmd-head"), pre = el("pre"), code = el("code", null, String(text));
+  pre.append(code);
+  const b = el("button", "linkbtn", "Copy"); b.type = "button"; b.id = id; b.setAttribute("aria-label", "Copy command");
+  b.onclick = async () => {
+    try { await navigator.clipboard.writeText(String(text)); toast("Copied"); }
+    catch (e) {
+      const sel = window.getSelection(); sel.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(code); sel.addRange(r);
+      setStatus("Clipboard is blocked here, so the command is selected. Press Cmd+C to copy it.", "err");
+    }
+  };
+  head.append(el("span", "trace-k", "Run this"), b);
+  box.append(head, pre);
+  return box;
+}
+// Bullets with `code` spans; a "Command: ..." bullet becomes a copyable block (skipped when the decision has its own `command`).
+function bullets(list, cls, d, key) {
+  const ul = el("ul", "pts" + (cls ? " " + cls : ""));
+  list.forEach((t, i) => {
+    const m = /^Command:\s*([\s\S]*)$/.exec(t);
+    if (m && d) { if (d.command) return; const li = el("li", "cmd-li"); li.append(cmdBlock(m[1], `cmd-${d.id}-${key}${i}`)); ul.append(li); return; }
+    const li = el("li"); codeText(li, t); ul.append(li);
+  });
+  return ul;
+}
 
 function tileBody(d) {
   const p = picks[d.id] || {}, body = el("div", "tile-body"); body.id = `b-${d.id}`;
   // an open tile already shows `what` in its header; rows (Change answer) don't
   if (d.what && !asTile(d)) body.append(section("What's being decided", el("p", "ctx", String(d.what))));
-  const bg = strList(d.background); if (bg.length) body.append(section("Background", bullets(bg)));
+  if (typeof d.command === "string" && d.command.trim()) body.append(cmdBlock(d.command, `cmd-${d.id}`));
+  const bg = strList(d.background); if (bg.length) body.append(section("Background", bullets(bg, null, d, "bg")));
   if (d.when) body.append(section("When", el("p", "ctx", String(d.when))));
   const changes = Array.isArray(d.changes) ? d.changes.filter((c) => c && c.effect) : [];
   if (changes.length) {
     const dl = el("dl", "changes");
-    for (const c of changes) { const g = el("div"); g.append(el("dt", null, label(d, c.choice) || String(c.choice || "")), el("dd", null, String(c.effect))); dl.append(g); }
+    for (const c of changes) { const g = el("div"); g.append(el("dt", null, label(d, c.choice) || String(c.choice || "")), (() => { const dd = el("dd"); codeText(dd, c.effect); return dd; })()); dl.append(g); }
     body.append(section("What changes", dl));
   }
   if (d.ifNoDecision) body.append(section("If you don't decide", el("p", "ctx", String(d.ifNoDecision))));
-  if (Array.isArray(d.points) && d.points.length) body.append(bullets(strList(d.points)));
+  if (Array.isArray(d.points) && d.points.length) body.append(bullets(strList(d.points), null, d, "pt"));
   else if (d.context && !d.what) body.append(el("p", "ctx", String(d.context)));
   const risks = strList(d.risks);
-  body.append(section(risks.length ? `Risks · ${risks.length}` : "Risks", risks.length ? bullets(risks, "risks") : el("p", "none", "None known")));
+  body.append(section(risks.length ? `Risks · ${risks.length}` : "Risks", risks.length ? bullets(risks, "risks", d, "rk") : el("p", "none", "None known")));
   {
     const ls = el("div", "links");
     for (const t of tickets(d)) {
