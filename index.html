@@ -223,6 +223,11 @@ code { font-family: var(--mono); font-size: 0.86em; background: var(--bg); borde
 .cmd pre { margin: 0; background: var(--bg); border-radius: 8px; padding: 10px 12px; overflow-x: auto; max-width: 100%; }
 .cmd pre code { background: none; padding: 0; font-size: 0.84rem; line-height: 1.5; white-space: pre; overflow-wrap: normal; }
 .pts li.cmd-li { list-style: none; margin-left: -1.1em; }
+.send-sum { margin: 0 0 -6px; text-align: right; font-size: 0.84rem; color: var(--muted); overflow-wrap: anywhere; }
+.pend-ans .ans-note { display: block; margin-top: 2px; color: var(--fg); overflow-wrap: anywhere; }
+.pend-ans.earlier { font-size: 0.84rem; }
+.pend-ans .ans-note.clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+textarea::placeholder { color: var(--faint); }
 /* floating send */
 .dock { position: fixed; z-index: 5; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   left: max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; pointer-events: none; }
@@ -474,6 +479,36 @@ function cmdBlock(text, id) {
   return box;
 }
 // Bullets with `code` spans; a "Command: ..." bullet becomes a copyable block (skipped when the decision has its own `command`).
+// What the Send button will send, in one line.
+function sendSummary(d) {
+  const p = picks[d.id] || {}, l = p.choice ? label(d, p.choice) || p.choice : "", n = (p.note || "").trim();
+  if (l && n) return `Sending: ${l} + your note`;
+  if (l) return `Sending: ${l}`;
+  if (n) return "Sending: your note only";
+  return "Pick an option, add a note, or both.";
+}
+// Ben's sent answer: the choice label, then the note (clamped with a more/less toggle when long).
+const ansOpen = new Set();
+function answerEl(d, prefix) {
+  const r = responses[d.id], wrap = el("span", "pend-ans");
+  wrap.append(prefix);
+  if (!r) { wrap.append(el("b", null, "No answer recorded")); return wrap; }
+  const l = label(d, r.choice); if (l) wrap.append(el("b", null, l));
+  const n = String(r.note || "").trim();
+  if (n) {
+    if (l) wrap.append(" + note");
+    const long = n.length > 140, open = ansOpen.has(d.id);
+    const q = el("span", "ans-note" + (long && !open ? " clamp2" : "")); codeText(q, n); wrap.append(q);
+    if (long) {
+      const b = el("button", "linkbtn more", open ? "less" : "more"); b.type = "button"; b.id = `an-${d.id}`;
+      b.setAttribute("aria-expanded", String(open));
+      b.onclick = () => { open ? ansOpen.delete(d.id) : ansOpen.add(d.id); render(); };
+      wrap.append(b);
+    }
+  }
+  if (!l && !n) wrap.append(el("b", null, "No answer recorded"));
+  return wrap;
+}
 function bullets(list, cls, d, key) {
   const ul = el("ul", "pts" + (cls ? " " + cls : ""));
   list.forEach((t, i) => {
@@ -541,14 +576,16 @@ function tileBody(d) {
     group.append(b);
   }
   if (group.childElementCount) body.append(group);
-  const lab = el("label", "note"); lab.htmlFor = `n-${d.id}`; lab.append("Or tell me something else");
+  const lab = el("label", "note"); lab.htmlFor = `n-${d.id}`; lab.append("Add a note (optional), sent with your choice");
   const ta = el("textarea"); ta.id = `n-${d.id}`; ta.rows = 2; ta.value = p.note || "";
+  ta.placeholder = "Anything to add, change or ask. Goes with the option you picked.";
   ta.oninput = () => {
     const wasQueued = queuedIds().includes(d.id);
     pick(d.id).note = ta.value; setStatus("");
-    if (wasQueued !== queuedIds().includes(d.id)) render(); else refreshDock();
+    if (wasQueued !== queuedIds().includes(d.id)) render(); else { refreshDock(); const sm = $(`ss-${d.id}`); if (sm) sm.textContent = sendSummary(d); }
   };
   lab.append(ta); body.append(lab);
+  const sm = el("p", "send-sum", sendSummary(d)); sm.id = `ss-${d.id}`; sm.setAttribute("aria-live", "polite"); body.append(sm);
   const bs = el("div", "body-send"); bs.append(sendBtn(d, `sb-${d.id}`, d.status === "answered" ? "Resend answer" : "Send this answer")); body.append(bs);
   return body;
 }
@@ -586,7 +623,7 @@ function renderTile(d) {
   if (d.status === "followup") {
     const top = el("div", "move-top"); top.append(el("span", "badge move", "Your move"));
     const ins = agentLine(d, "instr", ""); if (ins) top.append(ins);
-    if (responses[d.id]) top.append(el("span", "pend-meta", `Your earlier answer: ${answerText(d)}`));
+    if (responses[d.id]) { const ea = answerEl(d, "Your earlier answer: "); ea.classList.add("earlier"); top.append(ea); }
     tile.append(top);
   }
   tile.append(head, tileFoot(d));
@@ -638,7 +675,7 @@ function renderRow(d, inRecent) {
   tt.append(top);
   if (d.status === "followup") { const ins = agentLine(d, "instr", ""); if (ins) tt.append(ins); }
   if (r) {
-    const ans = el("span", "pend-ans", "Your answer: "); ans.append(el("b", null, answerText(d))); tt.append(ans);
+    tt.append(answerEl(d, "Your answer: "));
     const sent = ago(r.submittedAt); tt.append(el("span", "pend-meta", sent ? `Sent ${sent}` : "Sent"));
   }
   if (d.status !== "followup") { const ag = agentLine(d); if (ag) tt.append(ag); }
