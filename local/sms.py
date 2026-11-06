@@ -221,7 +221,7 @@ class Texting:
         old, self.client = self.client, bridge_from_env(env_path, self.inbound)
         if old:
             old.stop()
-        print(f"sms: texting {'on' if self.client else 'off'}", file=sys.stderr)
+        print(f"sms: {'credentials found' if self.client else 'texting off'}", file=sys.stderr)
 
     def run(self, env_path):
         while True:

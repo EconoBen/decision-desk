@@ -32,23 +32,35 @@ def load(p, default=None):
         return default
 
 
-def local_time(iso):
+def when(v):
+    """A timestamp as epoch seconds: ISO strings, or epoch seconds or milliseconds (some agents write numbers). 0 if unreadable."""
     try:
-        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ZoneInfo(TZ)).strftime("%-I:%M %p %Z")
+        if isinstance(v, (int, float)):
+            return v / 1000 if v > 1e11 else float(v)
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
     except Exception:
-        return iso or "?"
+        return 0.0
+
+
+def local_time(v):
+    try:
+        return datetime.fromtimestamp(when(v), ZoneInfo(TZ)).strftime("%-I:%M %p %Z") if when(v) else str(v or "?")
+    except Exception:
+        return str(v or "?")
 
 
 def pending(session):
     out = []
     for f in sorted((DB / "decisions").glob("*.json")):
         d, r = load(f, {}), load(DB / "responses" / f.name)
-        owner = (d.get("agent") or {}).get("id")
-        if not r or (owner and owner != session):
+        if not isinstance(d, dict) or not isinstance(r, dict):
+            continue  # one malformed doc must not hide the others
+        owner = (d.get("agent") or {}).get("id") if isinstance(d.get("agent"), dict) else None
+        if owner and owner != session:
             continue
-        sub = r.get("submittedAt") or ""
-        if sub > (d.get("agentAt") or ""):
-            out.append((f.stem, sub, d, r))
+        sub = r.get("submittedAt")
+        if when(sub) > when(d.get("agentAt")):
+            out.append((f.stem, str(sub), d, r))
     return out
 
 

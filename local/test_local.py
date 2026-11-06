@@ -156,6 +156,16 @@ class HookTest(Base):
         server.write_doc("decisions", "mine", {"agentAt": "2026-01-03T00:00:00Z"}, True)  # handled
         self.assertEqual({i[0] for i in inject.pending("s1")}, {"anyone"})
 
+    def test_numeric_timestamps(self):
+        # Some agents write epoch milliseconds. That must neither crash the hook nor hide other answers.
+        self.put("decisions", "ms", decision("Ms?", ["a"], agent={"kind": "session", "id": "s1"}, agentAt=1767225600000))  # 2026-01-01
+        self.put("responses", "ms", {"choice": "a", "note": "", "submittedAt": "2026-01-02T00:00:00.000Z"})
+        self.put("decisions", "bad", "not an object")
+        self.assertEqual({i[0] for i in inject.pending("s1")}, {"mine", "anyone", "ms"})
+        server.write_doc("decisions", "ms", {"agentAt": 1767398400000}, True)  # 2026-01-03, after the answer
+        self.assertEqual({i[0] for i in inject.pending("s1")}, {"mine", "anyone"})
+        self.assertEqual(inject.when(1767225600), inject.when("2026-01-01T00:00:00Z"))
+
     def test_remind(self):
         state = {}
         self.assertEqual(len(inject.collect("s1", state, 120)[0]), 2)

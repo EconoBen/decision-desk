@@ -275,7 +275,7 @@ def main():
     env_path = os.environ.get("DECISION_DESK_SPECTRUM_ENV") or STATE / "spectrum.env"
     TEXTING.reload(env_path)
     threading.Thread(target=TEXTING.run, args=(env_path,), daemon=True).start()
-    print(f"decision desk on http://127.0.0.1:{PORT}  data={DATA}  texting={'on' if TEXTING.client else 'off'}", file=sys.stderr)
+    print(f"decision desk on http://127.0.0.1:{PORT}  data={DATA}  texting={'credentials found' if TEXTING.client else 'off'}", file=sys.stderr)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 
 
