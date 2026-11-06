@@ -6,7 +6,7 @@ usual. Spectrum sends and receives only through its TypeScript SDK (gRPC), so a 
 Node process, spectrum-bridge.mjs, does the talking over stdin/stdout. Everything else
 is here, stdlib only. Without credentials, texting stays off.
 """
-import base64, hmac, json, os, re, secrets, shutil, subprocess, sys, threading, time, urllib.error, urllib.request
+import base64, hashlib, hmac, json, os, re, secrets, shutil, subprocess, sys, threading, time, urllib.error, urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,7 +22,29 @@ WELCOME = ('Your decision desk is connected. Decisions that need you will come h
 SHARED_PROJECT = ("This Photon project already sends its texts to another app (it has a webhook), so your replies would reach "
                   "that app too. Run local/setup_texting.py with a project just for the desk.")
 HELP = ('Reply with a number to answer, and add a note after it if you like: "2 go ahead". When several are open, '
-        'start with the tag: "<tag> 2". Text "list" to get the open ones again, or "stop" to turn these texts off.')
+        'start with the decision\'s code: "K7 2". Text "list" to get the open ones again, or "stop" to turn these texts off.')
+CODE_LETTERS, CODE_DIGITS = "ABCDEFGHJKMNPRSTUVWXYZ", "23456789"  # nothing that reads as 0/O or 1/I/L on a phone
+CONTEXT_MAX, LABEL_MAX = 280, 120
+
+
+def code(id):
+    """A short code for a decision that a person can type back: two letters and a digit, the same every time.
+    shortcut: two open decisions can share a code (1 in ~3900); a reply then gets the "which one?" text and the full id still works."""
+    h = hashlib.sha256(str(id).encode()).digest()
+    return CODE_LETTERS[h[0] % 22] + CODE_LETTERS[h[1] % 22] + CODE_DIGITS[h[2] % 8]
+
+
+def plain(text, limit=None):
+    """Decision text as it should read in a text message: no markdown, no inline code, one line, cut at a word."""
+    t = re.sub(r"\s*\(`[^`]*`\)", "", str(text or ""))       # a parenthesised command adds nothing on a phone
+    t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)              # [label](url) -> label
+    t = re.sub(r"(\*\*|__|`)", "", t)
+    t = " ".join(t.split())
+    if limit and len(t) > limit:
+        cut = t[: limit - 1]
+        end = cut.rfind(". ")
+        t = cut[: end + 1] if end > limit // 2 else cut.rsplit(" ", 1)[0].rstrip(",;:-") + "…"
+    return t
 
 
 def now_iso():
@@ -172,13 +194,18 @@ class Texting:
 
     # --- outbound --------------------------------------------------------
     def compose(self, id, d, several):
-        lines = [f"[{id}] {'Your move: ' if d.get('status') == 'followup' else ''}{d.get('title') or id}"]
-        if d.get("status") == "followup" and d.get("agentNote"):
-            note = " ".join(str(d["agentNote"]).split())
-            lines.append(note if len(note) <= 200 else note[:199] + "…")
+        """One decision as a readable text: a heading, the question, a line of context, the choices, how to reply."""
+        followup = d.get("status") == "followup"
+        context = d.get("agentNote") if followup else (d.get("summary") or d.get("what") or d.get("context"))
+        lines = [("Your move" if followup else "Decision") + (f" {code(id)}" if several else ""), plain(d.get("title") or id)]
+        if context:
+            lines += ["", plain(context, CONTEXT_MAX)]
+        lines.append("")
         for n, c in enumerate(d.get("choices") or [], 1):
-            lines.append(f"{n}. {c.get('label') or c.get('id')}" + (" (recommended)" if c.get("id") == d.get("recommended") else ""))
-        lines.append(f'Reply "{id} <n>", or add a note after the number.' if several else 'Reply with a number, or a number and a note.')
+            rec = " (recommended)" if c.get("id") == d.get("recommended") else ""
+            lines.append(f"{n}. {plain(c.get('label') or c.get('id'), LABEL_MAX)}{rec}")
+        lines += ["", f'Reply "{code(id)} 1", or add a note: "{code(id)} 1 go ahead".' if several
+                  else "Reply with a number, or a number and a note."]
         return "\n".join(lines)
 
     def tick(self):
@@ -273,7 +300,8 @@ class Texting:
             hit = []
             if m:
                 tok = m.group(1).lower()
-                hit = [x for x in pend if x[0].lower() == tok] or [x for x in pend if x[0].lower().startswith(tok)]
+                hit = ([x for x in pend if code(x[0]).lower() == tok] or [x for x in pend if x[0].lower() == tok]
+                       or [x for x in pend if x[0].lower().startswith(tok)])
             if len(hit) != 1:
                 return self._unmatched(pend)
             (id, d), n, note = hit[0], m.group(2), m.group(3)
@@ -284,7 +312,8 @@ class Texting:
         self.write("responses", id, {"choice": choices[int(n) - 1].get("id"), "note": (note or "").strip(), "submittedAt": now_iso()})
         if d.get("status") != "answered":
             self.write("decisions", id, {"status": "answered"}, True)
-        return f"Sent: [{id}] {choices[int(n) - 1].get('label') or choices[int(n) - 1].get('id')}"
+        picked = choices[int(n) - 1]
+        return f"Got it. {plain(d.get('title') or id, 80)} → {plain(picked.get('label') or picked.get('id'), LABEL_MAX)}"
 
     def _may_help(self):
         now = time.time()
@@ -299,9 +328,10 @@ class Texting:
             return None
         if len(pend) == 1:
             id, d = pend[0]
-            return f'Reply with a number from 1 to {len(d.get("choices") or [])} for [{id}], and a note after it if you like. Text "help" for more.'
-        return ('Several are open, so start with the tag: "<tag> 2". Open now: '
-                + ", ".join(f"{id} (1-{len(d.get('choices') or [])})" for id, d in pend) + '. Text "help" for more.')
+            return f'Reply with a number from 1 to {len(d.get("choices") or [])}, and a note after it if you like. Text "help" for more.'
+        return ('Several are open, so start with the code: "K7 2". Open now: '
+                + "; ".join(f"{code(id)} {plain(d.get('title') or id, 50)} (1-{len(d.get('choices') or [])})" for id, d in pend)
+                + '. Text "help" for more.')
 
 
 class Bridge:
