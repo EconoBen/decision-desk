@@ -1098,7 +1098,7 @@ function renderSms() {
   b.textContent = st.verified ? "Texting on" : "Text me"; b.setAttribute("aria-expanded", String(sms.open));
   if (!sms.open) return;
   const kids = [], say = (text, cls) => kids.push(el("p", "sms-say" + (cls ? " " + cls : ""), text));
-  if (!st.configured) say("Texting isn't set up on this desk yet. To set it up, run python3 local/setup_texting.py (the README has the steps).");
+  if (!st.configured) say(st.problem ? `Texting is off. ${st.problem}` : "Texting isn't set up on this desk yet. To set it up, run python3 local/setup_texting.py (the README has the steps).");
   else if (st.verified) {
     say(`Decisions that need you are texted to the number ending ${st.last4}. Reply to a text to answer it.`);
     kids.push(smsButton("smsOff", "Disconnect", "linkbtn", () => smsDo("disconnect", {})));

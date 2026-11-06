@@ -15,10 +15,12 @@ CODE_TTL, MAX_TRIES = 600, 5          # a code lives 10 minutes and allows 5 gue
 CODE_GAP, CODES_PER_HOUR = 30, 5      # rate limit on sending codes
 HELP_MAX, HELP_WINDOW = 3, 600        # unasked help texts: 3 per 10 minutes, so a phone's auto-reply can't start a loop
 TICK, BACKOFF = 5, 60                 # outbound pace (one text per tick), and the wait after a failed send
-KEYS = ("SPECTRUM_PROJECT_ID", "SPECTRUM_PROJECT_SECRET", "SPECTRUM_LINE")
+KEYS = ("SPECTRUM_PROJECT_ID", "SPECTRUM_PROJECT_SECRET", "SPECTRUM_LINE", "SPECTRUM_ALLOW_WEBHOOKS")
 API = "https://spectrum.photon.codes/projects/"
 WELCOME = ('Your decision desk is connected. Decisions that need you will come here. Reply with a number to answer, '
            'and add a note after it if you like. Text "help" any time.')
+SHARED_PROJECT = ("This Photon project already sends its texts to another app (it has a webhook), so your replies would reach "
+                  "that app too. Run local/setup_texting.py with a project just for the desk.")
 HELP = ('Reply with a number to answer, and add a note after it if you like: "2 go ahead". When several are open, '
         'start with the tag: "<tag> 2". Text "list" to get the open ones again, or "stop" to turn these texts off.')
 
@@ -106,16 +108,20 @@ class Texting:
 
     # --- HTTP routes -----------------------------------------------------
     def route(self, action, body):
+        client = self.client
+        problem = client.problem() if client and action in ("status", "connect") else None  # network, so outside the lock
         with self.lock:
             p, code = self.phone(), self.pending if self.pending and time.time() < self.pending["exp"] else None
             if action == "status":
-                return 200, {"configured": bool(self.client), "verified": bool(p), "last4": p[-4:] if p else None,
-                             "codeSent": bool(code), "codeTo": code["phone"][-4:] if code else None}
+                return 200, {"configured": bool(client) and not problem, "problem": problem, "verified": bool(p),
+                             "last4": p[-4:] if p else None, "codeSent": bool(code), "codeTo": code["phone"][-4:] if code else None}
             if action == "disconnect":
                 self._forget()
                 return 200, {"ok": True}
             if not self.client:
                 return 503, {"error": "Texting isn't set up on this desk yet. Run local/setup_texting.py."}
+            if problem and action == "connect":
+                return 409, {"error": problem}
             return self._connect(body) if action == "connect" else self._verify(body)
 
     def _forget(self):
@@ -304,7 +310,7 @@ class Bridge:
 
     def __init__(self, env, on_inbound, node="node"):
         self.env, self.on_inbound, self.cmd = env, on_inbound, [node, str(HERE / "spectrum-bridge.mjs")]
-        self.proc, self.waits, self.n, self.lock, self.kind = None, {}, 0, threading.Lock(), None
+        self.proc, self.waits, self.n, self.lock, self.kind, self.checked = None, {}, 0, threading.Lock(), None, None
 
     def start(self):
         with self.lock:
@@ -323,6 +329,16 @@ class Bridge:
                 proc.wait(5)
             except Exception:
                 proc.kill()
+
+    def problem(self):
+        """Why this project can't be the desk's, or None. One read-only check per configuration; network errors aren't kept."""
+        if self.checked is None:
+            try:
+                hooks = api(self.env, "GET", "/webhooks/") or []
+            except ApiError as e:
+                return str(e)
+            self.checked = (SHARED_PROJECT if hooks and self.env.get("SPECTRUM_ALLOW_WEBHOOKS") != "1" else "",)
+        return self.checked[0] or None
 
     def register(self, phone):
         """Free and Pro projects text from Photon's shared pool, and only to numbers registered as users. Idempotent."""

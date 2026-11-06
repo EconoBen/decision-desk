@@ -11,7 +11,10 @@ import inject, server, setup_texting, sms  # noqa: E402
 class FakeClient:
     """Stands in for the Spectrum client. Records texts and registrations instead of making them."""
     def __init__(self):
-        self.sent, self.registered, self.fail, self.stopped = [], [], None, 0
+        self.sent, self.registered, self.fail, self.stopped, self.why = [], [], None, 0, None
+
+    def problem(self):
+        return self.why
 
     def start(self):
         pass
@@ -201,7 +204,7 @@ class TextingTest(Base):
         self.client.sent.clear()
 
     def test_connect_verify_disconnect(self):
-        self.assertEqual(self.t.route("status", {})[1], {"configured": True, "verified": False, "last4": None, "codeSent": False, "codeTo": None})
+        self.assertEqual(self.t.route("status", {})[1], {"configured": True, "problem": None, "verified": False, "last4": None, "codeSent": False, "codeTo": None})
         code = self.connect()
         self.assertEqual(self.client.registered, [self.PHONE])  # shared-pool projects need the number registered first
         self.assertEqual(self.t.route("status", {})[1]["codeTo"], "0100")
@@ -232,6 +235,13 @@ class TextingTest(Base):
         self.assertIn("5 codes this hour", self.t.route("connect", {"phone": self.PHONE})[1]["error"])
         self.t.client = None
         self.assertEqual(self.t.route("connect", {"phone": self.PHONE})[0], 503)
+
+    def test_project_with_a_webhook_is_refused(self):
+        self.client.why = sms.SHARED_PROJECT
+        st = self.t.route("status", {})[1]
+        self.assertEqual((st["configured"], st["problem"]), (False, sms.SHARED_PROJECT))
+        self.assertEqual(self.t.route("connect", {"phone": self.PHONE}), (409, {"error": sms.SHARED_PROJECT}))
+        self.assertEqual((self.client.registered, self.client.sent), ([], []))  # nothing touched the project
 
     def test_clear_errors(self):
         for err, says in ((RuntimeError("Target not allowed for this project"), "Add it under Users"),
@@ -398,6 +408,24 @@ class ApiTest(unittest.TestCase):
             sms.api({"SPECTRUM_PROJECT_ID": "../x"}, "GET", "/")
 
 
+class ProblemTest(unittest.TestCase):
+    def test_webhook_check(self):
+        b = sms.Bridge({"SPECTRUM_PROJECT_ID": "p", "SPECTRUM_PROJECT_SECRET": "s"}, None)
+        with mock.patch.object(sms, "api", side_effect=sms.ApiError("Couldn't reach Photon.")):
+            self.assertEqual(b.problem(), "Couldn't reach Photon.")  # not kept: tried again next time
+        with mock.patch.object(sms, "api", return_value=[{"id": "w"}]) as api:
+            self.assertEqual(b.problem(), sms.SHARED_PROJECT)
+            self.assertEqual(b.problem(), sms.SHARED_PROJECT)
+            self.assertEqual(api.call_count, 1)
+            self.assertEqual(api.call_args.args[1:], ("GET", "/webhooks/"))  # read-only
+        ok = sms.Bridge({"SPECTRUM_PROJECT_ID": "p", "SPECTRUM_PROJECT_SECRET": "s", "SPECTRUM_ALLOW_WEBHOOKS": "1"}, None)
+        with mock.patch.object(sms, "api", return_value=[{"id": "w"}]):
+            self.assertIsNone(ok.problem())
+        clean = sms.Bridge({"SPECTRUM_PROJECT_ID": "p", "SPECTRUM_PROJECT_SECRET": "s"}, None)
+        with mock.patch.object(sms, "api", return_value=[]):
+            self.assertIsNone(clean.problem())
+
+
 class SetupTest(unittest.TestCase):
     def run_setup(self, answers, project, kind="shared", lines=(), hooks=()):
         tmp = Path(tempfile.mkdtemp())
@@ -416,7 +444,7 @@ class SetupTest(unittest.TestCase):
         code, env, out = self.run_setup(["proj-1"], {"name": "Desk"})
         self.assertEqual(code, 1)  # no server running in the test, so it says to start one
         self.assertEqual(stat.S_IMODE(env.stat().st_mode), 0o600)
-        self.assertEqual(env.read_text(), "SPECTRUM_PROJECT_ID=proj-1\nSPECTRUM_PROJECT_SECRET=the-secret-value\nSPECTRUM_LINE=\n")
+        self.assertEqual(env.read_text(), "SPECTRUM_PROJECT_ID=proj-1\nSPECTRUM_PROJECT_SECRET=the-secret-value\nSPECTRUM_LINE=\nSPECTRUM_ALLOW_WEBHOOKS=\n")
         self.assertNotIn("the-secret-value", out)
         self.assertIn("shared pool", out)
 
@@ -433,6 +461,8 @@ class SetupTest(unittest.TestCase):
         code, env, out = self.run_setup(["proj-1", "n"], {"name": "Prod"}, hooks=[{"id": "w"}])
         self.assertFalse(env.exists())
         self.assertIn("1 webhook", out)
+        code, env, out = self.run_setup(["proj-1", "y"], {"name": "Prod"}, hooks=[{"id": "w"}])
+        self.assertIn("SPECTRUM_ALLOW_WEBHOOKS=1", env.read_text())
 
 
 class BridgeTest(unittest.TestCase):

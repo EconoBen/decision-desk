@@ -45,16 +45,18 @@ def main():
             return 1
     else:
         print("Texts come from Photon's shared pool. Connecting in the page registers your number as a user of this project.")
+    allow = ""
     if hooks:
         print(f"Careful: this project has {len(hooks)} webhook(s). Each one also gets your replies to the desk.")
         if ask("Use it anyway? [y/N] ").lower() != "y":
             print("Stopped. Nothing was written.")
             return 1
+        allow = "1"
     STATE.mkdir(parents=True, exist_ok=True)
     tmp = ENV.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write(f"SPECTRUM_PROJECT_ID={creds['SPECTRUM_PROJECT_ID']}\nSPECTRUM_PROJECT_SECRET={creds['SPECTRUM_PROJECT_SECRET']}\nSPECTRUM_LINE={line}\n")
+        f.write(f"SPECTRUM_PROJECT_ID={creds['SPECTRUM_PROJECT_ID']}\nSPECTRUM_PROJECT_SECRET={creds['SPECTRUM_PROJECT_SECRET']}\nSPECTRUM_LINE={line}\nSPECTRUM_ALLOW_WEBHOOKS={allow}\n")
     os.chmod(tmp, 0o600)
     tmp.replace(ENV)
     print(f"Wrote {ENV} (only you can read it).")
