@@ -12,7 +12,7 @@ Environment (all optional):
   DECISION_DESK_PORT   defaults to 8791
   DECISION_DESK_SPECTRUM_ENV, DECISION_DESK_NODE   the optional text-message line; see sms.py
 """
-import json, os, re, sys, threading
+import hashlib, json, os, re, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -29,25 +29,53 @@ TEXTING = None  # sms.Texting, set in main()
 
 SHIM = """<script>
 (() => {
+  // The artifact's window.claude.use("db"), served from local JSON files.
   const j = (r) => { if (!r.ok) throw Object.assign(new Error(r.statusText), { code: r.status }); return r.json(); };
-  const get = (p) => fetch("/db/" + p, { cache: "no-store" }).then(j);
-  const send = (m, p, v) => fetch("/db/" + p, { method: m, headers: { "Content-Type": "application/json" }, body: JSON.stringify(v) }).then(j);
-  const watch = (p, shape, cb, err) => {
-    let last = null, stop = false;
-    const tick = async () => {
-      try { const v = await get(p), s = JSON.stringify(v); if (s !== last) { last = s; cb(shape(v)); } }
-      catch (e) { if (err) err(e); }
-      if (!stop) setTimeout(tick, 1500);
-    };
-    tick(); return () => { stop = true; };
+  const watchers = new Set(), cols = {};
+  const col = (name) => cols[name] || (cols[name] = { writes: 0, epoch: 0, ver: null });
+  // A watcher fires only when its value really changes.
+  const show = (w, v) => { const s = JSON.stringify(v); if (s !== w.last) { w.last = s; w.val = v; w.cb(w.shape(v)); } };
+  // A read that overlaps a write is dropped; the read after the write confirms it.
+  const load = (w) => {
+    const c = col(w.col), epoch = c.epoch;
+    fetch("/db/" + w.path, { cache: "no-store" }).then(j).then((v) => { if (!c.writes && c.epoch === epoch && watchers.has(w)) show(w, v); }, () => {});
+  };
+  const reload = (name) => { for (const w of watchers) if (w.col === name) load(w); };
+  // The server says which collections changed as they change, so nothing polls.
+  new EventSource("/events").onmessage = (e) => {
+    for (const [name, ver] of Object.entries(JSON.parse(e.data))) if (col(name).ver !== ver) { col(name).ver = ver; reload(name); }
+  };
+  const watch = (path, shape, cb) => {
+    const [name, id] = path.split("/"), w = { path, col: name, id, shape, cb, last: null, val: null };
+    watchers.add(w); load(w); return () => watchers.delete(w);
+  };
+  // Writes show at once, as they do in the artifact's store. The server's copy then confirms them, or undoes them if the write failed.
+  const local = (path, val, merge) => {
+    const [name, id] = path.split("/");
+    for (const w of watchers) {
+      if (w.col !== name || w.val == null) continue;
+      if (w.id === id) show(w, { exists: true, data: merge ? { ...(w.val.data || {}), ...val } : val });
+      else if (!w.id) {
+        const rows = w.val.map((r) => (r.id === id ? { id, data: merge ? { ...r.data, ...val } : val } : r));
+        if (!merge && !rows.some((r) => r.id === id)) rows.push({ id, data: val });
+        show(w, rows);
+      }
+    }
+  };
+  const send = async (method, path, val) => {
+    const name = path.split("/")[0], c = col(name), before = [...watchers].filter((w) => w.col === name && w.val != null).map((w) => [w, w.val]);
+    c.writes++; local(path, val, method === "PATCH");
+    try { return await fetch("/db/" + path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(val) }).then(j); }
+    catch (e) { for (const [w, v] of before) show(w, v); throw e; } // undo at once, even if the server is gone
+    finally { c.writes--; c.epoch++; reload(name); }
   };
   const docs = (field) => (rows) => {
     if (field) rows = rows.slice().sort((a, b) => ((a.data[field] ?? 0) > (b.data[field] ?? 0)) - ((a.data[field] ?? 0) < (b.data[field] ?? 0)));
     return { metadata: { fromCache: false }, docs: rows.map((r) => ({ id: r.id, data: () => r.data })) };
   };
-  const collection = (name, field) => ({ orderBy: (f) => collection(name, f), onSnapshot: (cb, err) => watch(name, docs(field), cb, err) });
+  const collection = (name, field) => ({ orderBy: (f) => collection(name, f), onSnapshot: (cb) => watch(name, docs(field), cb) });
   const doc = (path) => ({
-    onSnapshot: (cb, err) => watch(path, (r) => ({ exists: r.exists, data: () => r.data }), cb, err),
+    onSnapshot: (cb) => watch(path, (r) => ({ exists: r.exists, data: () => r.data }), cb),
     set: (v) => send("PUT", path, v),
     update: (v) => send("PATCH", path, v),
   });
@@ -58,14 +86,56 @@ SHIM = """<script>
 
 
 # The store. The page's set/update and the text-message line both write through here.
+_cache = {}  # path -> ((mtime_ns, size), parsed JSON)
+
+
+def _load(f):
+    """A file's JSON, parsed again only when its mtime or size changes. A half-written file keeps its last good copy."""
+    st = f.stat()
+    key, hit = (st.st_mtime_ns, st.st_size), _cache.get(f)
+    if hit and hit[0] == key:
+        return hit[1]
+    try:
+        data = json.loads(f.read_text())
+    except ValueError:
+        if hit:
+            return hit[1]
+        raise
+    _cache[f] = (key, data)
+    return data
+
+
 def read_doc(col, id):
-    f = DATA / col / f"{id}.json"
-    return json.loads(f.read_text()) if f.exists() else None
+    try:
+        return _load(DATA / col / f"{id}.json")
+    except (OSError, ValueError):
+        return None
 
 
 def list_docs(col):
-    d = DATA / col
-    return [(f.stem, json.loads(f.read_text())) for f in sorted(d.glob("*.json"))] if d.is_dir() else []
+    out = []
+    for f in sorted((DATA / col).glob("*.json")):
+        try:
+            out.append((f.stem, _load(f)))
+        except (OSError, ValueError):
+            pass  # removed or half written; the next change event brings it back
+    return out
+
+
+def versions():
+    """A short fingerprint per collection from file names, mtimes and sizes: stat calls only, no reads."""
+    out = {}
+    for d in sorted(DATA.iterdir()) if DATA.is_dir() else []:
+        if d.is_dir() and NAME.match(d.name):
+            h = hashlib.blake2b(digest_size=8)
+            for f in sorted(d.glob("*.json")):
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                h.update(f"{f.name}:{st.st_mtime_ns}:{st.st_size};".encode())
+            out[d.name] = h.hexdigest()
+    return out
 
 
 def write_doc(col, id, val, merge=False):
@@ -74,7 +144,7 @@ def write_doc(col, id, val, merge=False):
     if merge:
         if not f.exists():
             return False
-        val = {**json.loads(f.read_text()), **val}
+        val = {**_load(f), **val}
     f.parent.mkdir(parents=True, exist_ok=True)
     tmp = f.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(val, indent=2))
@@ -127,6 +197,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
+        if path == "/events":
+            return self._events()
         if path == "/sms/status":
             return self._json(*TEXTING.route("status", {}))
         parts = self._parts()
@@ -136,6 +212,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, [{"id": i, "data": d} for i, d in list_docs(parts[0])])
         d = read_doc(*parts)
         return self._json(200, {"exists": d is not None, "data": d})
+
+    def _events(self):
+        """Server-sent events: the collection fingerprints whenever one changes, and every 15 s as a ping."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        last, quiet = None, 0
+        try:
+            while True:
+                v = versions()
+                if v != last or quiet >= 150:
+                    self.wfile.write(f"data: {json.dumps(v)}\n\n".encode())
+                    self.wfile.flush()
+                    last, quiet = v, 0
+                time.sleep(0.1)  # ponytail: each open tab stats the store 10 times a second; one shared watcher if tabs pile up
+                quiet += 1
+        except OSError:
+            pass  # the tab went away
 
     def _write(self, merge):
         if not self._trusted(True):
@@ -177,8 +272,9 @@ def main():
     global TEXTING
     DATA.mkdir(parents=True, exist_ok=True)
     TEXTING = sms.Texting(read_doc, write_doc, list_docs, STATE / "sms-state.json")
-    TEXTING.client = sms.bridge_from_env(os.environ.get("DECISION_DESK_SPECTRUM_ENV") or STATE / "spectrum.env", TEXTING.inbound)
-    threading.Thread(target=TEXTING.run, daemon=True).start()
+    env_path = os.environ.get("DECISION_DESK_SPECTRUM_ENV") or STATE / "spectrum.env"
+    TEXTING.reload(env_path)
+    threading.Thread(target=TEXTING.run, args=(env_path,), daemon=True).start()
     print(f"decision desk on http://127.0.0.1:{PORT}  data={DATA}  texting={'on' if TEXTING.client else 'off'}", file=sys.stderr)
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 

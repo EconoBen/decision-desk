@@ -3,5 +3,8 @@
   "description": "Only needed for the optional text-message line (spectrum-bridge.mjs).",
   "dependencies": {
     "spectrum-ts": "^12.14.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.0"
   }
 }

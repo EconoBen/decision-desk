@@ -1,24 +1,30 @@
 """Self-check for local mode: python3 -m unittest local/test_local.py (stdlib only, no network, no texts)."""
-import http.client, json, os, re, subprocess, sys, tempfile, threading, time, unittest
+import http.client, io, json, os, re, stat, subprocess, sys, tempfile, threading, time, unittest, urllib.error
 from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import inject, server, sms  # noqa: E402
+import inject, server, setup_texting, sms  # noqa: E402
 
 
 class FakeClient:
-    """Stands in for the Spectrum bridge. Records texts instead of sending them."""
+    """Stands in for the Spectrum client. Records texts and registrations instead of making them."""
     def __init__(self):
-        self.sent, self.fail = [], False
+        self.sent, self.registered, self.fail, self.stopped = [], [], None, 0
 
     def start(self):
         pass
 
+    def stop(self):
+        self.stopped += 1
+
+    def register(self, phone):
+        self.registered.append(phone)
+
     def send(self, to, text):
         if self.fail:
-            raise RuntimeError("down")
+            raise self.fail
         self.sent.append((to, text))
 
 
@@ -106,6 +112,33 @@ class ServerTest(Base):
         self.assertEqual(self.req("POST", "/sms/nope", {})[0], 404)
 
 
+    def test_events_stream_changes(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/events", headers={"Host": f"127.0.0.1:{self.port}"})
+        r = c.getresponse()
+        self.assertEqual(r.headers["Content-Type"], "text/event-stream")
+        first = json.loads(r.fp.readline().decode().removeprefix("data: "))
+        r.fp.readline()
+        t0 = time.time()
+        server.write_doc("decisions", "new", {"title": "x"})  # an in-process write, like a text reply
+        nxt = json.loads(r.fp.readline().decode().removeprefix("data: "))
+        self.assertLess(time.time() - t0, 1)
+        self.assertNotEqual(first.get("decisions"), nxt["decisions"])
+        c.close()
+
+    def test_cache_follows_mtime_and_survives_half_writes(self):
+        f = self.db / "decisions" / "a.json"
+        self.put("decisions", "a", {"v": 1})
+        self.assertEqual(self.doc("decisions", "a"), {"v": 1})
+        with mock.patch.object(Path, "read_text", side_effect=AssertionError("re-read")):
+            self.assertEqual(self.doc("decisions", "a"), {"v": 1})  # unchanged file: served from the cache
+        f.write_text('{"v": 22}')
+        self.assertEqual(self.doc("decisions", "a"), {"v": 22})
+        f.write_text('{"v": 3')  # an agent caught mid-write
+        self.assertEqual(self.doc("decisions", "a"), {"v": 22})
+        self.assertEqual(self.req("GET", "/db/decisions")[1], [{"id": "a", "data": {"v": 22}}])
+
+
 class HookTest(Base):
     def setUp(self):
         super().setUp()
@@ -164,33 +197,58 @@ class TextingTest(Base):
     def verified(self):
         code = self.connect()
         self.assertEqual(self.t.route("verify", {"code": code}), (200, {"ok": True, "last4": "0100"}))
+        self.assertEqual(self.t.tick(), "said")  # the hello goes first
         self.client.sent.clear()
 
-    def test_connect_verify(self):
-        self.assertEqual(self.t.route("status", {})[1], {"configured": True, "verified": False, "last4": None, "codeSent": False})
-        self.verified()
+    def test_connect_verify_disconnect(self):
+        self.assertEqual(self.t.route("status", {})[1], {"configured": True, "verified": False, "last4": None, "codeSent": False, "codeTo": None})
+        code = self.connect()
+        self.assertEqual(self.client.registered, [self.PHONE])  # shared-pool projects need the number registered first
+        self.assertEqual(self.t.route("status", {})[1]["codeTo"], "0100")
+        self.assertEqual(self.t.route("verify", {"code": f" {code[:3]} {code[3:]} "})[0], 200)  # spaces are fine
         self.assertEqual(self.doc("meta", "settings"), {"phone": self.PHONE, "phoneVerified": True})
         self.assertEqual(self.t.route("status", {})[1]["last4"], "0100")
+        self.assertEqual(self.t.tick(), "said")
+        self.assertIn("connected", self.client.sent[-1][1])
         self.assertEqual(self.t.route("disconnect", {})[0], 200)
         self.assertEqual(self.doc("meta", "settings"), {})
+        self.assertEqual(self.client.stopped, 1)
+        self.assertIsNone(self.t.tick())
 
     def test_wrong_code_and_limits(self):
         self.assertEqual(self.t.route("connect", {"phone": "12"})[0], 400)
         code = self.connect()
-        self.assertEqual(self.t.route("connect", {"phone": self.PHONE})[0], 429)  # too soon for another code
+        st, body = self.t.route("connect", {"phone": self.PHONE})
+        self.assertEqual(st, 429)
+        self.assertIn("seconds", body["error"])
+        self.assertEqual(self.t.route("verify", {"code": "12"}), (400, {"error": "The code has 6 digits."}))  # doesn't use a try
         wrong = "000000" if code != "000000" else "111111"
-        for _ in range(sms.MAX_TRIES - 1):
-            self.assertEqual(self.t.route("verify", {"code": wrong})[0], 400)
+        for left in range(sms.MAX_TRIES - 1, 0, -1):
+            self.assertEqual(self.t.route("verify", {"code": wrong}), (400, {"error": f"That code doesn't match. {left} tries left."}))
         self.assertEqual(self.t.route("verify", {"code": wrong})[0], 429)
         self.assertEqual(self.t.route("verify", {"code": code})[0], 400)  # locked out: the right code is gone too
         self.assertIsNone(self.doc("meta", "settings"))
+        self.t.codes = [time.time() - 3500] * 5
+        self.assertIn("5 codes this hour", self.t.route("connect", {"phone": self.PHONE})[1]["error"])
         self.t.client = None
         self.assertEqual(self.t.route("connect", {"phone": self.PHONE})[0], 503)
+
+    def test_clear_errors(self):
+        for err, says in ((RuntimeError("Target not allowed for this project"), "Add it under Users"),
+                          (RuntimeError("401 Unauthorized"), "project id and secret"),
+                          (TimeoutError("bridge did not answer"), "in time"),
+                          (sms.ApiError("Couldn't reach Photon."), "Couldn't reach Photon."),
+                          (RuntimeError("something else"), "didn't go out")):
+            self.t.codes, self.client.fail = [], err
+            st, body = self.t.route("connect", {"phone": self.PHONE})
+            self.assertEqual(st, 502)
+            self.assertIn(says, body["error"])
 
     def test_outbound_dedupe(self):
         self.put("decisions", "one", decision("First?", ["a", "b"], recommended="b", order=1))
         self.put("decisions", "two", decision("Second?", ["a"], order=2))
         self.put("decisions", "gone", decision("Answered", ["a"], status="answered"))
+        self.put("decisions", "nochoice", {"title": "Nothing to pick", "status": "open", "order": 3})
         self.assertIsNone(self.t.tick())  # no verified phone, nothing goes out
         self.verified()
         self.assertEqual([self.t.tick(), self.t.tick(), self.t.tick()], ["one", "two", None])
@@ -199,19 +257,27 @@ class TextingTest(Base):
         self.assertIn('"one <n>"', first)  # several open, so the tag form
         server.write_doc("decisions", "one", {"changedAt": "2026-01-05T00:00:00Z"}, True)
         self.assertEqual([self.t.tick(), self.t.tick()], ["one", None])  # new state, texted once more
-        self.client.fail = True
+        self.client.fail = RuntimeError("down")
         server.write_doc("decisions", "two", {"changedAt": "2026-01-06T00:00:00Z"}, True)
         self.assertIsNone(self.t.tick())
-        self.client.fail = False
+        self.client.fail = None
         self.assertIsNone(self.t.tick())  # backing off after a failure
         self.t.retry_at = 0
         self.assertEqual(self.t.tick(), "two")
+
+    def test_followup_is_texted_and_answered(self):
+        self.put("decisions", "move", decision("Pick again?", ["x", "y"], status="followup", agentNote="The first plan fell through. Two new options."))
+        self.verified()
+        self.assertEqual(self.t.tick(), "move")
+        self.assertEqual(self.client.sent[0][1].splitlines()[:2], ["[move] Your move: Pick again?", "The first plan fell through. Two new options."])
+        self.assertEqual(self.t.inbound(self.PHONE, "2"), "Sent: [move] Y")
+        self.assertEqual(self.doc("decisions", "move")["status"], "answered")
 
     def test_reply_one_pending(self):
         self.put("decisions", "solo", decision("Ship?", ["yes", "no"]))
         self.verified()
         self.t.tick()
-        self.assertIn('Reply "<n>"', self.client.sent[0][1])
+        self.assertIn("Reply with a number", self.client.sent[0][1])
         self.assertEqual(self.t.inbound("+1 415 555 0100", "2 not\nyet"), "Sent: [solo] No")
         r = self.doc("responses", "solo")
         self.assertEqual((r["choice"], r["note"]), ("no", "not\nyet"))
@@ -223,6 +289,7 @@ class TextingTest(Base):
         self.put("decisions", "rc7-cve", decision("CVE?", ["fix", "allow", "wait"]))
         self.verified()
         for text in ("1", "rc7 1", "rc7-key 3", "hello"):  # ambiguous, ambiguous prefix, out of range, junk
+            self.t.helps = []
             self.assertIn("Several are open", self.t.inbound(self.PHONE, text))
         self.assertEqual(list(self.db.glob("responses/*.json")), [])
         self.assertEqual(self.t.inbound(self.PHONE, "RC7-CVE 2 with an expiry"), "Sent: [rc7-cve] Allow")
@@ -230,14 +297,30 @@ class TextingTest(Base):
         self.assertEqual(self.t.inbound(self.PHONE, "[rc7-key] 1"), "Sent: [rc7-key] Me")
         self.assertEqual(self.doc("responses", "rc7-key")["note"], "")
 
-    def test_list_resends(self):
+    def test_help_list_stop(self):
         self.put("decisions", "a", decision("A?", ["x"], order=1))
         self.put("decisions", "b", decision("B?", ["x"], order=2))
         self.verified()
+        self.assertEqual(self.t.inbound(self.PHONE, "Help"), sms.HELP)
+        self.assertEqual(self.t.inbound(self.PHONE, "?"), sms.HELP)
         self.t.tick(), self.t.tick()
         self.assertIsNone(self.t.tick())
         self.assertIsNone(self.t.inbound(self.PHONE, "List"))
         self.assertEqual([self.t.tick(), self.t.tick(), self.t.tick()], ["a", "b", None])
+        self.client.sent.clear()
+        self.assertIn("Texts are off", self.t.inbound(self.PHONE, "STOP"))
+        self.assertEqual(self.client.sent[-1][0], self.PHONE)  # the reply went out before the phone was forgotten
+        self.assertEqual(self.doc("meta", "settings"), {})
+        self.assertEqual(self.client.stopped, 1)
+        self.assertIsNone(self.t.inbound(self.PHONE, "1"))  # no longer heard
+
+    def test_help_is_rate_limited(self):
+        self.put("decisions", "a", decision("A?", ["x"]))
+        self.verified()
+        replies = [self.t.inbound(self.PHONE, "I'm driving with Focus on") for _ in range(5)]  # an auto-reply loop
+        self.assertEqual(sum(r is not None for r in replies), sms.HELP_MAX)
+        self.assertEqual(len(self.client.sent), sms.HELP_MAX)
+        self.assertEqual(self.t.inbound(self.PHONE, "help"), sms.HELP)  # asked for, always answered
 
     def test_unknown_sender_rejected(self):
         self.put("decisions", "solo", decision("Ship?", ["yes"]))
@@ -245,9 +328,11 @@ class TextingTest(Base):
         self.verified()
         for sender in ("+14155550199", "someone@example.com", "", None):
             self.assertIsNone(self.t.inbound(sender, "1"))
+            self.assertIsNone(self.t.inbound(sender, "stop"))
         self.assertEqual(self.client.sent, [])  # strangers never get a reply
         self.assertIsNone(self.doc("responses", "solo"))
         self.assertEqual(self.doc("decisions", "solo")["status"], "open")
+        self.assertTrue(self.doc("meta", "settings")["phoneVerified"])
 
     def test_writes_match_the_page(self):
         page = (HERE.parent / "index.html").read_text()
@@ -269,6 +354,86 @@ class TextingTest(Base):
         self.assertEqual(self.doc("decisions", "by-text"), {**base, "status": "answered"})
         self.assertIn("by-text", [i[0] for i in inject.pending("s1")])  # the hooks pick it up unchanged
 
+    def test_reload_picks_up_spectrum_env(self):
+        env, made = self.tmp / "spectrum.env", []
+        fake = lambda path, cb: made.append(FakeClient()) or made[-1] if sms.load_env(path).get("SPECTRUM_PROJECT_ID") else None
+        with mock.patch.object(sms, "bridge_from_env", fake):
+            t = sms.Texting(server.read_doc, server.write_doc, server.list_docs, self.tmp / "s.json")
+            t.reload(env)
+            self.assertIsNone(t.client)
+            env.write_text("SPECTRUM_PROJECT_ID=p\nSPECTRUM_PROJECT_SECRET=s\n")
+            t.reload(env)
+            self.assertIs(t.client, made[0])
+            t.reload(env)
+            self.assertEqual(len(made), 1)  # unchanged file, same client
+            time.sleep(0.01)
+            env.write_text("SPECTRUM_PROJECT_ID=p2\nSPECTRUM_PROJECT_SECRET=s\n")
+            t.reload(env)
+            self.assertEqual((len(made), made[0].stopped), (2, 1))  # new values: new client, old one stopped
+
+
+class ApiTest(unittest.TestCase):
+    def test_headers_and_errors(self):
+        seen = []
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        def urlopen(req, timeout):
+            seen.append(req)
+            return Resp(b'{"succeed": true, "data": {"type": "shared"}}')
+        creds = {"SPECTRUM_PROJECT_ID": "proj-1", "SPECTRUM_PROJECT_SECRET": "s3cret"}
+        with mock.patch("urllib.request.urlopen", urlopen):
+            self.assertEqual(sms.api(creds, "GET", "/imessage/"), {"type": "shared"})
+        h = dict(seen[0].header_items())
+        self.assertEqual(seen[0].full_url, "https://spectrum.photon.codes/projects/proj-1/imessage/")
+        self.assertEqual(h["User-agent"], "decision-desk-local")  # Python's default agent is refused upstream
+        self.assertTrue(h["Authorization"].startswith("Basic "))
+        with mock.patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("u", 401, "no", {}, None)):
+            with self.assertRaisesRegex(sms.ApiError, "didn't accept") as cm:
+                sms.api(creds, "GET", "/")
+            self.assertNotIn("s3cret", str(cm.exception))
+        with self.assertRaises(sms.ApiError):
+            sms.api({"SPECTRUM_PROJECT_ID": "../x"}, "GET", "/")
+
+
+class SetupTest(unittest.TestCase):
+    def run_setup(self, answers, project, kind="shared", lines=(), hooks=()):
+        tmp = Path(tempfile.mkdtemp())
+        calls = {"/": project, "/imessage/": {"type": kind}, "/lines/": {"lines": list(lines)}, "/webhooks/": list(hooks)}
+        answers = iter(answers)
+        out = io.StringIO()
+        with mock.patch.object(setup_texting, "STATE", tmp), mock.patch.object(setup_texting, "ENV", tmp / "spectrum.env"), \
+             mock.patch.object(sms, "api", lambda creds, m, path, body=None: calls[path]), \
+             mock.patch("builtins.input", lambda p="": next(answers)), mock.patch("getpass.getpass", lambda p="": "the-secret-value"), \
+             mock.patch("urllib.request.urlopen", side_effect=OSError), mock.patch.object(setup_texting.time, "sleep"), \
+             mock.patch("sys.stdout", out):
+            code = setup_texting.main()
+        return code, tmp / "spectrum.env", out.getvalue()
+
+    def test_writes_private_env_and_never_prints_the_secret(self):
+        code, env, out = self.run_setup(["proj-1"], {"name": "Desk"})
+        self.assertEqual(code, 1)  # no server running in the test, so it says to start one
+        self.assertEqual(stat.S_IMODE(env.stat().st_mode), 0o600)
+        self.assertEqual(env.read_text(), "SPECTRUM_PROJECT_ID=proj-1\nSPECTRUM_PROJECT_SECRET=the-secret-value\nSPECTRUM_LINE=\n")
+        self.assertNotIn("the-secret-value", out)
+        self.assertIn("shared pool", out)
+
+    def test_dedicated_line_checked(self):
+        line = {"platform": "imessage", "phoneNumber": "+14155550123", "status": "available"}
+        code, env, out = self.run_setup(["proj-1"], {"name": "Desk"}, "dedicated", [line])
+        self.assertIn("SPECTRUM_LINE=+14155550123", env.read_text())
+        code, env, out = self.run_setup(["proj-1", "+14155550999"], {"name": "Desk"}, "dedicated", [line, {**line, "phoneNumber": "+14155550124"}])
+        self.assertEqual(code, 1)
+        self.assertFalse(env.exists())
+        self.assertIn("isn't one of this project's lines", out)
+
+    def test_webhooks_need_a_yes(self):
+        code, env, out = self.run_setup(["proj-1", "n"], {"name": "Prod"}, hooks=[{"id": "w"}])
+        self.assertFalse(env.exists())
+        self.assertIn("1 webhook", out)
+
 
 class BridgeTest(unittest.TestCase):
     FAKE = ("import json,sys\n"
@@ -287,16 +452,26 @@ class BridgeTest(unittest.TestCase):
             b.send("bad", "hello")
         time.sleep(0.2)
         self.assertEqual(got, [("+14155550100", "hi")])
-        b.proc.stdin.close()
+        proc = b.proc
+        b.stop()
+        self.assertIsNotNone(proc.poll())
+        proc.stdout.close()
+
+    def test_fatal_start_fails_the_send(self):
+        b = sms.Bridge({}, lambda f, t: None)
+        b.cmd = [sys.executable, "-c", "import json; print(json.dumps({'fatal': 'Invalid project credentials'}), flush=True)"]
+        with self.assertRaisesRegex(RuntimeError, "Invalid project credentials"):
+            b.send("+14155550100", "hello")
         b.proc.wait(5)
+        b.proc.stdin.close()
         b.proc.stdout.close()
 
-    def test_off_without_full_config(self):
+    def test_off_without_credentials(self):
         with tempfile.NamedTemporaryFile("w", suffix=".env") as f:
-            f.write("SPECTRUM_PROJECT_ID=x\nSPECTRUM_PROJECT_SECRET=y\n")
+            f.write("SPECTRUM_PROJECT_ID=x\n")
             f.flush()
-            with mock.patch.dict(os.environ, {"SPECTRUM_LINE": ""}):
-                self.assertIsNone(sms.bridge_from_env(f.name, None))  # no line, texting stays off
+            with mock.patch.dict(os.environ, {"SPECTRUM_PROJECT_SECRET": ""}):
+                self.assertIsNone(sms.bridge_from_env(f.name, None))  # no secret, texting stays off
         self.assertIsNone(sms.bridge_from_env("/nonexistent/spectrum.env", None))
 
 

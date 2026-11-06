@@ -21,7 +21,14 @@ You can also run the page on your own machine, with no claude.ai artifact. `loca
 2. Open http://127.0.0.1:8791.
 3. The data lives in `~/.local/state/decision-desk/db/<collection>/<id>.json`, one JSON object per doc, in the collections of the data contract below. Your agent reads and writes these files directly. Write atomically: write `<id>.json.tmp`, then rename it over `<id>.json`.
 
-Settings are environment variables, all optional: `DECISION_DESK_PORT` (8791), `DECISION_DESK_STATE` (`~/.local/state/decision-desk`), `DECISION_DESK_DATA` (`<state>/db`), `DECISION_DESK_PAGE` (this repo's `index.html`) and `DECISION_DESK_TZ` (`America/Los_Angeles`, for times in hook messages). To check it all works: `python3 -m unittest local/test_local.py`.
+Settings are environment variables, all optional: `DECISION_DESK_PORT` (8791), `DECISION_DESK_STATE` (`~/.local/state/decision-desk`), `DECISION_DESK_DATA` (`<state>/db`), `DECISION_DESK_PAGE` (this repo's `index.html`) and `DECISION_DESK_TZ` (`America/Los_Angeles`, for times in hook messages).
+
+How it stays quick:
+- The server tells the page which collections changed, as they change, over one event stream. Nothing polls, and an agent's write shows up in about a tenth of a second.
+- Your answers show on the page the moment you send them, the way the artifact's store does it, and the server's copy confirms them. If a save fails, the page puts things back and says so.
+- The server keeps parsed files in memory and re-reads one only when it changes.
+
+To check it all works: `python3 -m unittest local/test_local.py`. The browser checks need Google Chrome: run `npm install` in `local/`, then `node --test local/test_browser.mjs`.
 
 ### Answers straight into Claude Code
 
@@ -54,21 +61,23 @@ How answers find their session:
 The local server can text you the decisions that need you, and you answer by replying. It uses a [Photon Spectrum](https://photon.codes/docs/spectrum-ts/getting-started) iMessage line.
 
 How it works:
-- In the page, tap Text me, enter your number and tap Connect. The line texts you a 6-digit code. Enter it and tap Verify. Your number is saved in `meta/settings` as `phone`, with `phoneVerified: true`.
-- Each open decision is texted to you once: its tag, the title and the numbered choices, with the recommended one marked. If the agent rewrites it (a new `changedAt`) and it's open again, you get it again.
-- Reply `2`, or `2 sounds good` to add a note. When several are open, start with the tag: `<tag> 2 sounds good`. Text `list` to get all the open ones again. A reply the desk can't match gets a short help text back.
-- A texted answer is saved exactly like one sent from the page (`responses/<slug>`, then status `answered`), so the hooks deliver it the same way.
+- In the page, tap Text me, enter your number and tap Connect. The line texts you a 6-digit code. Enter it and tap Verify, and a short hello arrives. Your number is saved in `meta/settings` as `phone`, with `phoneVerified: true`.
+- Each decision that needs you is texted once: its tag, the title and the numbered choices, with the recommended one marked. That means open decisions, and "Your move" followups that have choices. If the agent rewrites one (a new `changedAt` or status), you get it again. Texts go out a few seconds apart.
+- Reply `2`, or `2 sounds good` to add a note. When several are open, start with the tag: `<tag> 2 sounds good`. The desk texts back what it sent.
+- Text `list` to get the open ones again, `help` for these rules, or `stop` to turn texts off. A reply the desk can't match gets a short help text, at most 3 every 10 minutes, so a phone's auto-reply can't start a loop.
+- A texted answer is saved exactly like one sent from the page (`responses/<slug>`, then status `answered`). It shows on the page within a second, and the hooks deliver it the same way.
 - Only your verified number is heard. Texts from anyone else are dropped without a reply.
 
 Setup:
-1. Spectrum's SDK is TypeScript only, so a small Node script, `local/spectrum-bridge.mjs`, does the sending and receiving. Install Node 18.17 or later, then run `npm install` in `local/`. The server starts the script when it's needed and talks to it over a pipe; it opens no ports.
-2. Copy `local/spectrum.env.example` to `~/.local/state/decision-desk/spectrum.env`, run `chmod 600` on it, and fill in your project id, project secret and the line's number. Keep it out of git.
-3. Restart the server. It prints `texting=on` when everything is in place.
+1. Make a Photon project just for the desk at https://app.photon.codes (or `npx @photon-ai/cli login`, then `npx @photon-ai/cli projects create --name "Decision desk" --platforms imessage`). On the Free and Pro plans, texts come from Photon's shared pool of numbers. On Business you can add a dedicated line.
+2. Spectrum's SDK is TypeScript only, so a small Node script, `local/spectrum-bridge.mjs`, does the sending and receiving. Install Node 18.17 or later, then run `npm install --omit=dev` in `local/`. The server starts the script when it's needed and talks to it over a pipe; it opens no ports.
+3. Run `python3 local/setup_texting.py` and paste the project id and secret from the project's Settings. The secret is typed hidden. The script checks them with read-only calls, writes `~/.local/state/decision-desk/spectrum.env` that only you can read, and waits until the running server has picked it up. No restart needed.
+4. In the page, tap Text me and connect your phone. On a shared-pool project, Connect also registers your number as a user of the project, because those projects only text registered numbers.
 
 Things to know:
 - Replies come in over the SDK's own connection, so there is no webhook and nothing open to the internet.
-- Use a line nothing else answers. Every webhook registered on a Spectrum project gets the texts sent to that project's lines, so if another app shares the project, it gets your replies too.
-- Photon's deliverability guide prefers that people text the line first. The desk texts first (the code), so Apple may show a "Report Junk" banner until you save the line as a contact.
+- Use a project nothing else answers. Every webhook registered on a Spectrum project gets the texts sent to that project's lines, so if another app shares the project, it gets your replies too. The setup script warns you if the project has webhooks.
+- Photon's deliverability guide prefers that people text the line first. The desk texts first (the code), so Apple may show a "Report Junk" banner until you save the number as a contact.
 
 ## Data contract
 
