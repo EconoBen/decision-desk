@@ -48,6 +48,14 @@ h1 { font-family: var(--display); font-size: clamp(1.9rem, 6vw, 2.5rem); font-we
 .status-line b, .countdown b { color: var(--ink); font-weight: 600; }
 .countdown { margin: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.93rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .countdown .passed b { color: var(--faint); font-weight: 500; }
+/* "Text me": only when served by local/server.py */
+.sms-btn { margin-left: auto; }
+.sms-btn[hidden], .sms[hidden] { display: none; }
+.sms { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 14px; padding: 14px 16px; border-radius: var(--r-md); background: var(--surface); box-shadow: var(--sh-1); font-size: 0.9rem; color: var(--muted); }
+.sms-say { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.sms-say.err { color: var(--err); }
+.sms input { font: inherit; font-size: 0.92rem; color: var(--ink); background: var(--sunken); border: 0; border-radius: 99px; padding: 7px 14px; width: 15em; max-width: 100%; }
+.sms input::placeholder { color: var(--faint); }
 
 /* sections */
 section { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -280,7 +288,9 @@ textarea::placeholder { color: var(--faint); }
     <div class="hud">
       <p class="status-line" id="statusLine">Loading…</p>
       <p class="countdown" id="countdown" hidden></p>
+      <button class="linkbtn sms-btn" id="smsBtn" type="button" aria-controls="smsBox" aria-expanded="false" hidden>Text me</button>
     </div>
+    <div class="sms" id="smsBox" hidden></div>
   </header>
   <div class="notice" id="notice">Loading decisions…</div>
   <section id="needSec" hidden>
@@ -319,6 +329,32 @@ const picks = {};   // id -> {choice, note}; only tiles Ben touched
 let openId = null, submitting = false, act = null; // act: {id, kind: 'reply'|'reopen', text}
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+// Re-renders build fresh nodes, then patch() updates the page in place: elements that didn't change stay put,
+// so focus, scroll, open panels and running animations survive live updates. Items match by data-id or id.
+// Because a kept element takes the new handlers, a handler must read its element from the event (e.currentTarget), not a closure.
+const keyOf = (n) => (n.nodeType === 1 ? n.dataset.id || n.id || null : null);
+function morph(node, next) {
+  if (node.nodeType !== next.nodeType || node.nodeName !== next.nodeName || keyOf(node) !== keyOf(next)) { node.replaceWith(next); return; }
+  if (node.nodeType !== 1) { if (node.nodeValue !== next.nodeValue) node.nodeValue = next.nodeValue; return; }
+  const keep = (name) => name === "open" && node.tagName === "DETAILS"; // panels open and close by hand only
+  for (const { name } of [...node.attributes]) if (!next.hasAttribute(name) && !keep(name)) node.removeAttribute(name);
+  for (const { name, value } of next.attributes) if (node.getAttribute(name) !== value && !keep(name)) node.setAttribute(name, value);
+  for (const h of ["onclick", "oninput", "ontoggle", "onkeydown"]) if (node[h] !== next[h]) node[h] = next[h];
+  if ((node.tagName === "TEXTAREA" || node.tagName === "INPUT") && node !== document.activeElement && node.value !== next.value) node.value = next.value;
+  patch(node, [...next.childNodes]);
+}
+function patch(parent, kids) {
+  const byKey = new Map();
+  for (const n of parent.childNodes) { const k = keyOf(n); if (k) byKey.set(k, n); }
+  kids.forEach((next, i) => {
+    const k = keyOf(next), cur = parent.childNodes[i];
+    const old = k ? byKey.get(k) : cur && !keyOf(cur) && cur.nodeName === next.nodeName ? cur : null;
+    if (!old) { parent.insertBefore(next, cur || null); return; }
+    if (old !== cur) parent.insertBefore(old, cur || null);
+    morph(old, next);
+  });
+  while (parent.childNodes.length > kids.length) parent.lastChild.remove();
+}
 function notice(text, err) { const n = $("notice"); n.hidden = !text; n.textContent = text || ""; n.classList.toggle("err", !!err); }
 function setStatus(text, kind) { const s = $("status"); s.hidden = !text; s.textContent = text || ""; s.className = kind || ""; }
 function queuedIds() { return Object.keys(picks).filter((id) => picks[id].choice || (picks[id].note || "").trim()); }
@@ -512,7 +548,7 @@ function disclosure(d, key, title, aside, warn, ...kids) {
   sum.append(el("span", "disc-t", title)); if (aside) sum.append(el("span", "disc-aside" + (warn ? " warn" : ""), aside));
   const body = el("div", "disc-body"); body.append(...kids);
   det.append(sum, body);
-  det.ontoggle = () => { det.open ? discOpen.add(k) : discOpen.delete(k); };
+  det.ontoggle = (e) => { e.currentTarget.open ? discOpen.add(k) : discOpen.delete(k); };
   return det;
 }
 function section(title, ...kids) { const b = el("div", "block"); b.append(el("h3", null, title), ...kids); return b; }
@@ -521,10 +557,11 @@ function cmdBlock(text, id) {
   const box = el("div", "cmd"), head = el("div", "cmd-head"), pre = el("pre"), code = el("code", null, String(text));
   pre.append(code);
   const b = el("button", "linkbtn", "Copy"); b.type = "button"; b.id = id; b.setAttribute("aria-label", "Copy command");
-  b.onclick = async () => {
+  b.onclick = async (ev) => {
+    const shown = ev.currentTarget.closest(".cmd").querySelector("code");
     try { await navigator.clipboard.writeText(String(text)); toast("Copied"); }
     catch (e) {
-      const sel = window.getSelection(); sel.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(code); sel.addRange(r);
+      const sel = window.getSelection(); sel.removeAllRanges(); const r = document.createRange(); r.selectNodeContents(shown); sel.addRange(r);
       setStatus("Clipboard is blocked here, so the command is selected. Press Cmd+C to copy it.", "err");
     }
   };
@@ -636,9 +673,9 @@ function tileBody(d) {
   const lab = el("label", "note"); lab.htmlFor = `n-${d.id}`; lab.append("Add a note (optional), sent with your choice");
   const ta = el("textarea"); ta.id = `n-${d.id}`; ta.rows = 2; ta.value = p.note || "";
   ta.placeholder = "Anything to add, change or ask. Goes with the option you picked.";
-  ta.oninput = () => {
+  ta.oninput = (e) => {
     const wasQueued = queuedIds().includes(d.id);
-    pick(d.id).note = ta.value; setStatus("");
+    pick(d.id).note = e.currentTarget.value; setStatus("");
     if (wasQueued !== queuedIds().includes(d.id)) render(); else { refreshDock(); const sm = $(`ss-${d.id}`); if (sm) sm.textContent = sendSummary(d); }
   };
   lab.append(ta); body.append(lab);
@@ -807,7 +844,7 @@ function actBox(d, kind) {
   const go = el("button", "send-one", busy ? "Sending…" : kind === "reopen" ? "Reopen" : kind === "info" ? "Ask for more info" : "Send reply");
   go.type = "button"; go.id = `xs-${d.id}`;
   go.disabled = !db || busy || (kind === "reply" && !(act.text || "").trim());
-  ta.oninput = () => { act.text = ta.value; if (kind === "reply") go.disabled = !db || sending.has(d.id) || !ta.value.trim(); };
+  ta.oninput = (e) => { act.text = e.currentTarget.value; const b = $(`xs-${d.id}`); if (kind === "reply" && b) b.disabled = !db || sending.has(d.id) || !act.text.trim(); };
   go.onclick = () => doAct(d.id, kind);
   lab.append(ta);
   const btns = el("div", "body-send"); btns.append(go);
@@ -815,15 +852,26 @@ function actBox(d, kind) {
   return box;
 }
 
-// Scroll anchoring: whatever item is focused, or the topmost visible one, keeps its screen position across re-renders.
+// Scroll anchoring: one item keeps its screen position across re-renders. That is the item Ben is acting on
+// (focused, or clicked in the last 2 s, which covers browsers that don't focus buttons), else the first item that
+// starts on screen. Not one hanging off the top edge: that one may be the item that grew.
+let acted = { id: null, at: 0 };
+document.addEventListener("click", (e) => { const it = e.target.closest && e.target.closest("main [data-id]"); if (it) acted = { id: it.dataset.id, at: Date.now() }; }, true);
 function captureAnchor() {
-  const f = document.activeElement, inItem = f && f.closest ? f.closest("[data-id]") : null;
-  const item = inItem || [...document.querySelectorAll("main [data-id]")].find((e) => e.getBoundingClientRect().bottom > 0);
-  return { fid: f && f.id, sel: f && f.selectionStart, key: item && item.dataset.id, top: item ? item.getBoundingClientRect().top : 0, focusIn: !!inItem };
+  const f = document.activeElement, items = [...document.querySelectorAll("main [data-id]")];
+  const onScreen = (e) => { const r = e && e.getBoundingClientRect(); return !!r && r.bottom > 0 && r.top < innerHeight; };
+  const inItem = f && f.closest ? f.closest("main [data-id]") : null;
+  const recent = Date.now() - acted.at < 2000 ? items.find((e) => e.dataset.id === acted.id) : null;
+  const item = [inItem, recent].find(onScreen) || items.find((e) => { const t = e.getBoundingClientRect().top; return t >= 0 && t < innerHeight; }) || items.find(onScreen);
+  return { f, fid: f && f.id, sel: f && f.selectionStart, key: item && item.dataset.id, top: item ? item.getBoundingClientRect().top : 0, focusIn: !!inItem };
 }
 function restoreAnchor(a) {
   const item = a.key && document.querySelector(`[data-id="${CSS.escape(a.key)}"]`);
-  if (item) { const dy = item.getBoundingClientRect().top - a.top; if (Math.abs(dy) > 0.5) window.scrollBy(0, dy); }
+  if (item) {
+    const dy = item.getBoundingClientRect().top - a.top; if (Math.abs(dy) > 0.5) window.scrollBy(0, dy);
+    const r = item.getBoundingClientRect(); if (r.bottom < 40) window.scrollBy(0, r.top - 16); // it collapsed above the screen (sent from its bottom): bring it back
+  }
+  if (a.f && a.f.isConnected) return; // patch() kept the focused element, so focus and selection are intact
   const f = a.fid && $(a.fid);
   if (f) { f.focus({ preventScroll: true }); if (a.sel != null && f.setSelectionRange) f.setSelectionRange(a.sel, a.sel); }
   else if (a.focusIn && item) item.focus({ preventScroll: true });
@@ -926,17 +974,17 @@ function render() {
   if (editId && (byId.get(editId) || {}).status !== "answered") { if (!sending.has(editId)) delete picks[editId]; editId = null; }
   if (act && !byId.has(act.id)) act = null;
 
+  const anchor = captureAnchor(); // before anything changes: the counts below can rewrap the header
   const count = (s) => decisions.filter((d) => (d.status || "open") === s).length;
-  const nOpen = count("open"), nMove = count("followup");
-  const sl = $("statusLine"); sl.replaceChildren();
+  const nOpen = count("open"), nMove = count("followup"), counts = [];
   for (const [cls, n, word, extra] of [["need", nOpen + nMove, "need you", nMove ? ` (incl. ${nMove} your move)` : ""], ["prog", count("answered"), "with", " your agent"], ["others", count("waiting"), "waiting", " on others"], ["done", count("done"), "done", ""]].filter(([cls, n]) => n || cls === "need" || cls === "done")) {
     const s = el("span", cls); s.append(el("i"), el("b", null, String(n)), " " + (cls === "prog" ? "with agent" : word));
     if (cls === "prog") { s.lastChild.textContent = " with "; s.append(el("span", "long", "your "), "agent"); }
     else if (extra) s.append(el("span", "long", extra));
-    sl.append(s);
+    counts.push(s);
   }
+  patch($("statusLine"), counts);
 
-  const anchor = captureAnchor();
   for (const [g, listId, secId] of GROUPS) {
     const items = layout[g].map((id) => { const d = byId.get(id); return d ? { node: asTile(d) ? renderTile(d) : renderRow(d, g === "recent"), bucket: bucketOf(d) } : null; }).filter(Boolean);
     const els = withHeaders(items);
@@ -944,7 +992,7 @@ function render() {
       $(secId).hidden = !decisions.length;
       if (!els.length) { const c = el("div", "calm"); c.append(el("strong", null, "You're all caught up"), "Nothing needs your call right now."); els.push(c); }
     } else $(secId).hidden = !els.length;
-    $(listId).replaceChildren(...els);
+    patch($(listId), els);
   }
   restoreAnchor(anchor);
 
@@ -1028,7 +1076,7 @@ function renderDigest() {
   const list = $("digestList");
   if (digestErr) { list.replaceChildren(el("p", "calm small", `Couldn't load this log (${digestErr}). Reload the page to try again.`)); return; }
   if (!digest.length) { list.replaceChildren(el("p", "calm small", "Nothing logged yet")); return; }
-  list.replaceChildren(...digest.map((g) => {
+  patch(list, digest.map((g) => {
     const open = digestOpen.has(g.id), items = Array.isArray(g.items) ? g.items.filter((i) => i && i.text) : [];
     const wrap = el("div", "dg" + (open ? " open" : ""));
     const b = el("button", "dg-head"); b.type = "button"; b.id = `dg-${g.id}`;
@@ -1053,6 +1101,59 @@ function renderDigest() {
   }));
   if (fid && fid.startsWith("dg-") && $(fid)) $(fid).focus({ preventScroll: true });
 }
+// "Text me": connect a phone to the desk's text-message line. Only on the local server (local/server.py), never in the artifact.
+const sms = { open: false, st: null, err: "", busy: false, again: false, phone: "", code: "" };
+async function smsCall(path, body) {
+  const r = await fetch("/sms/" + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : { cache: "no-store" });
+  const v = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(v.error || "That didn't work. Try again.");
+  return v;
+}
+async function smsDo(path, body) {
+  if (sms.busy) return; sms.busy = true; sms.err = ""; renderSms();
+  try { await smsCall(path, body); sms.again = false; sms.code = ""; }
+  catch (e) { sms.err = e.message; }
+  try { sms.st = await smsCall("status"); } catch (e) {}
+  sms.busy = false; renderSms();
+  if (path === "connect" && !sms.err) $("smsCode")?.focus();
+}
+function smsButton(id, text, cls, fn) { const b = el("button", cls, text); b.type = "button"; b.id = id; b.disabled = sms.busy; b.onclick = fn; return b; }
+function smsInput(id, key, placeholder, label, attrs, go) {
+  const i = Object.assign(el("input"), { id, placeholder, value: sms[key], ...attrs }); i.setAttribute("aria-label", label);
+  i.oninput = (e) => { sms[key] = e.currentTarget.value; };
+  i.onkeydown = (e) => { if (e.key === "Enter") go(); };
+  return i;
+}
+function renderSms() {
+  const st = sms.st, b = $("smsBtn"), box = $("smsBox");
+  b.hidden = !st; box.hidden = !st || !sms.open;
+  if (!st) return;
+  b.textContent = st.verified ? "Texting on" : "Text me"; b.setAttribute("aria-expanded", String(sms.open));
+  if (!sms.open) return;
+  const kids = [], say = (text, cls) => kids.push(el("p", "sms-say" + (cls ? " " + cls : ""), text));
+  if (!st.configured) say(st.problem ? `Texting is off. ${st.problem}` : "Texting isn't set up on this desk yet. To set it up, run python3 local/setup_texting.py (the README has the steps).");
+  else if (st.verified) {
+    say(`Decisions that need you are texted to the number ending ${st.last4}. Reply to a text to answer it.`);
+    kids.push(smsButton("smsOff", "Disconnect", "linkbtn", () => smsDo("disconnect", {})));
+  } else if (st.codeSent && !sms.again) {
+    const go = () => smsDo("verify", { code: sms.code });
+    say(`We texted a code to the number ending ${st.codeTo}. Enter it to finish.`);
+    kids.push(smsInput("smsCode", "code", "6-digit code", "Code from the text", { type: "text", inputMode: "numeric", autocomplete: "one-time-code", maxLength: 6 }, go),
+      smsButton("smsVerify", sms.busy ? "Checking…" : "Verify", "accept", go));
+    if (sms.phone) kids.push(smsButton("smsResend", "Send a new code", "linkbtn", () => smsDo("connect", { phone: sms.phone })));
+    kids.push(smsButton("smsOther", "Use another number", "linkbtn", () => { sms.again = true; sms.err = ""; renderSms(); }));
+  } else {
+    const go = () => smsDo("connect", { phone: sms.phone });
+    say("Get a text when a decision needs you, and answer by replying.");
+    kids.push(smsInput("smsPhone", "phone", "Phone, with country code", "Your phone number", { type: "tel", autocomplete: "tel" }, go),
+      smsButton("smsConnect", sms.busy ? "Sending…" : "Connect", "accept", go));
+  }
+  if (sms.err) say(sms.err, "err");
+  patch(box, kids);
+}
+$("smsBtn").onclick = () => { sms.open = !sms.open; sms.err = ""; renderSms(); };
+if (window.claude?.local) smsCall("status").then((v) => { sms.st = v; renderSms(); }).catch(() => {});
+
 $("send").onclick = submit;
 setInterval(() => { greet(); renderCountdown(); render(); if (db) renderDigest(); }, 60000); // keeps the relative times fresh
 
