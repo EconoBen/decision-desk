@@ -273,7 +273,7 @@ class TextingTest(Base):
         self.verified()
         self.assertEqual([self.t.tick(), self.t.tick(), self.t.tick()], ["one", "two", None])
         first = self.client.sent[0][1]
-        self.assertEqual(first.splitlines()[:4], [f"Decision {sms.code('one')}", "First?", "", "1. A"])
+        self.assertEqual(first.split("\n\n")[:3], [f"Decision {sms.code('one')} (1 of 2)", "First?", "1. A"])
         self.assertIn("2. B (recommended)", first)
         self.assertIn(f'"{sms.code("one")} 1"', first)  # several open, so the code form
         server.write_doc("decisions", "one", {"changedAt": "2026-01-05T00:00:00Z"}, True)
@@ -290,8 +290,8 @@ class TextingTest(Base):
         self.put("decisions", "move", decision("Pick again?", ["x", "y"], status="followup", agentNote="The first plan fell through. Two new options."))
         self.verified()
         self.assertEqual(self.t.tick(), "move")
-        self.assertEqual(self.client.sent[0][1].splitlines()[:4], ["Your move", "Pick again?", "", "The first plan fell through. Two new options."])
-        self.assertEqual(self.t.inbound(self.PHONE, "2"), "Got it. Pick again? → Y")
+        self.assertEqual(self.client.sent[0][1].splitlines()[:4], ["Your move", "", "Pick again?", ""])
+        self.assertEqual(self.t.inbound(self.PHONE, "2"), f"Got it, {sms.code('move')}: Pick again? → Y")
         self.assertEqual(self.doc("decisions", "move")["status"], "answered")
 
     def test_reply_one_pending(self):
@@ -299,7 +299,7 @@ class TextingTest(Base):
         self.verified()
         self.t.tick()
         self.assertIn("Reply with a number", self.client.sent[0][1])
-        self.assertEqual(self.t.inbound("+1 415 555 0100", "2 not\nyet"), "Got it. Ship? → No")
+        self.assertEqual(self.t.inbound("+1 415 555 0100", "2 not\nyet"), f"Got it, {sms.code('solo')}: Ship? → No")
         r = self.doc("responses", "solo")
         self.assertEqual((r["choice"], r["note"]), ("no", "not\nyet"))
         self.assertEqual(self.doc("decisions", "solo")["status"], "answered")
@@ -313,15 +313,16 @@ class TextingTest(Base):
             self.t.helps = []
             self.assertIn("Several are open", self.t.inbound(self.PHONE, text))
         self.assertEqual(list(self.db.glob("responses/*.json")), [])
-        self.assertEqual(self.t.inbound(self.PHONE, "RC7-CVE 2 with an expiry"), "Got it. CVE? → Allow")
+        self.assertEqual(self.t.inbound(self.PHONE, "RC7-CVE 2 with an expiry"), f"Got it, {sms.code('rc7-cve')}: CVE? → Allow")
         self.assertEqual(self.doc("responses", "rc7-cve")["note"], "with an expiry")
-        self.assertEqual(self.t.inbound(self.PHONE, "[rc7-key] 1"), "Got it. Key? → Me")
+        self.assertEqual(self.t.inbound(self.PHONE, "[rc7-key] 1"), f"Got it, {sms.code('rc7-key')}: Key? → Me")
         self.assertEqual(self.doc("responses", "rc7-key")["note"], "")
 
     def test_texts_read_as_plain_text(self):
         """Ben read the first live texts as gibberish: ids, backticks and shell commands straight from the JSON."""
         self.put("decisions", "trainb-render-81c4", decision("Fix the `drill.sh` wipe, then **rerun**?", ["fix", "stop"], recommended="fix", order=1))
         server.write_doc("decisions", "trainb-render-81c4", {
+            "agent": {"kind": "session", "id": "s1", "label": "Ben's ICE session"},
             "what": "Run 4 failed in seed. " + "The wipe keeps an old file. " * 20,
             "choices": [{"id": "fix", "label": 'Add one line (`mv -f "$STATE/a.txt" "$STATE/a.bak"`) and rerun [run 5](https://x.test/5)'},
                         {"id": "stop", "label": "Stop the drill"}]}, True)
@@ -333,10 +334,13 @@ class TextingTest(Base):
             self.assertNotIn(junk, text)
         self.assertIn("Fix the drill.sh wipe, then rerun?", text)
         self.assertIn("1. Add one line and rerun run 5 (recommended)", text)
-        context = text.split("\n")[3]
+        context = text.split("\n\n")[2]
         self.assertTrue(len(context) <= sms.CONTEXT_MAX and context.endswith("."), context)
         self.assertRegex(c, r"^[A-Z]{2}[2-9]$")
-        self.assertEqual(self.t.inbound(self.PHONE, f"{c.lower()} 1 go"), "Got it. Fix the drill.sh wipe, then rerun? → Add one line and rerun run 5")
+        self.assertTrue(text.startswith(f"Decision {c} (1 of 2)\nFrom: Ben's ICE session\n\n"), text[:80])
+        self.assertIn("\n\n1. Add one line", text)
+        self.assertIn("(recommended)\n\n2. Stop the drill\n\n", text)
+        self.assertEqual(self.t.inbound(self.PHONE, f"{c.lower()} 1 go"), f"Got it, {c}: Fix the drill.sh wipe, then rerun? → Add one line and rerun run 5")
         self.assertEqual(self.doc("responses", "trainb-render-81c4")["note"], "go")
 
     def test_help_list_stop(self):

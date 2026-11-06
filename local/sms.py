@@ -193,20 +193,24 @@ class Texting:
         return 200, {"ok": True, "last4": p["phone"][-4:]}
 
     # --- outbound --------------------------------------------------------
-    def compose(self, id, d, several):
-        """One decision as a readable text: a heading, the question, a line of context, the choices, how to reply."""
+    def compose(self, id, d, several, pos=None, total=None):
+        """One decision as a readable text, in paragraphs: which decision and who asked, the question, a line of
+        context, each choice, how to reply. The code and "2 of 5" tell several open decisions apart."""
         followup = d.get("status") == "followup"
         context = d.get("agentNote") if followup else (d.get("summary") or d.get("what") or d.get("context"))
-        lines = [("Your move" if followup else "Decision") + (f" {code(id)}" if several else ""), plain(d.get("title") or id)]
+        head = ("Your move" if followup else "Decision") + (f" {code(id)}" if several else "")
+        if several and pos and total:
+            head += f" ({pos} of {total})"
+        who = (d.get("agent") or {}).get("label") if isinstance(d.get("agent"), dict) else None
+        paras = [head + (f"\nFrom: {plain(who, 60)}" if who else ""), plain(d.get("title") or id)]
         if context:
-            lines += ["", plain(context, CONTEXT_MAX)]
-        lines.append("")
+            paras.append(plain(context, CONTEXT_MAX))
         for n, c in enumerate(d.get("choices") or [], 1):
             rec = " (recommended)" if c.get("id") == d.get("recommended") else ""
-            lines.append(f"{n}. {plain(c.get('label') or c.get('id'), LABEL_MAX)}{rec}")
-        lines += ["", f'Reply "{code(id)} 1", or add a note: "{code(id)} 1 go ahead".' if several
-                  else "Reply with a number, or a number and a note."]
-        return "\n".join(lines)
+            paras.append(f"{n}. {plain(c.get('label') or c.get('id'), LABEL_MAX)}{rec}")
+        paras.append(f'Reply "{code(id)} 1", or add a note: "{code(id)} 1 go ahead".' if several
+                     else "Reply with a number, or a number and a note.")
+        return "\n\n".join(paras)
 
     def tick(self):
         """Send the next queued text, or the first waiting decision not yet texted in its current state."""
@@ -216,8 +220,10 @@ class Texting:
                 return None
             state, pend = self._state(), self.waiting_on_you()
             sent, say = state.get("sent", {}), state.get("say", [])
-            nxt = next(((i, d) for i, d in pend if sent.get(i) != f"{d.get('status') or 'open'}|{d.get('changedAt') or ''}"), None)
-            text = say[0] if say else nxt and self.compose(*nxt, len(pend) > 1)
+            nxt = next(((n, i, d) for n, (i, d) in enumerate(pend, 1)
+                        if sent.get(i) != f"{d.get('status') or 'open'}|{d.get('changedAt') or ''}"), None)
+            text = say[0] if say else nxt and self.compose(nxt[1], nxt[2], len(pend) > 1, nxt[0], len(pend))
+            nxt = nxt and nxt[1:]
         self.client.start()  # keeps the inbound stream up while a phone is connected
         if not text:
             return None
@@ -313,7 +319,7 @@ class Texting:
         if d.get("status") != "answered":
             self.write("decisions", id, {"status": "answered"}, True)
         picked = choices[int(n) - 1]
-        return f"Got it. {plain(d.get('title') or id, 80)} → {plain(picked.get('label') or picked.get('id'), LABEL_MAX)}"
+        return f"Got it, {code(id)}: {plain(d.get('title') or id, 80)} → {plain(picked.get('label') or picked.get('id'), LABEL_MAX)}"
 
     def _may_help(self):
         now = time.time()
