@@ -96,6 +96,8 @@ h2 { font-family: var(--display); font-size: 1.05rem; font-weight: 600; letter-s
 .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line); flex: none; }
 .chip.red { color: var(--err); font-weight: 600; } .chip.red::before { background: var(--err); }
 .chip.amber { color: var(--warn); font-weight: 600; } .chip.amber::before { background: var(--warn); }
+.lnk { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.tk.lnk { text-decoration: none; } .tk.lnk:hover { text-decoration: underline; }
 .tk { display: inline-flex; align-items: center; gap: 6px; font-size: 0.76rem; font-weight: 500; padding: 1px 9px 1px 8px; border-radius: 99px; white-space: nowrap; background: var(--sunken); color: var(--muted); font-variant-numeric: tabular-nums; }
 .tk::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--faint); flex: none; }
 .tk.t-done::before { background: var(--ok); }
@@ -219,7 +221,9 @@ h3 { font-size: 0.82rem; font-weight: 600; color: var(--muted); margin: 0; }
 label.note { display: flex; flex-direction: column; gap: 8px; font-size: 0.86rem; font-weight: 600; color: var(--muted); }
 textarea { font: inherit; font-size: 0.95rem; font-weight: 400; color: var(--ink); background: var(--sunken); border: 0; border-radius: var(--r-md); padding: 12px 14px; min-height: 3em; resize: vertical; }
 textarea::placeholder { color: var(--faint); }
-.send-sum { margin: 0 0 -10px; text-align: right; font-size: 0.86rem; color: var(--muted); overflow-wrap: anywhere; }
+.sum-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; margin-bottom: -10px; }
+.send-sum { margin: 0; text-align: right; font-size: 0.86rem; color: var(--muted); overflow-wrap: anywhere; }
+.sel-hint { grid-column: 2; font-size: 0.78rem; font-weight: 500; color: var(--muted); }
 .body-send { display: flex; justify-content: flex-end; }
 .act-box { display: flex; flex-direction: column; gap: 10px; padding: 0 20px 20px var(--indent); }
 
@@ -609,7 +613,7 @@ function bullets(list, cls, d, key) {
 function tileBody(d) {
   const p = picks[d.id] || {}, body = el("div", "tile-body"); body.id = `b-${d.id}`;
   // an open tile already shows `what` in its header; rows (Change answer) don't
-  if (d.what && !asTile(d)) body.append(section("What's being decided", el("p", "ctx", String(d.what))));
+  if (d.what && !asTile(d)) { const p = el("p", "ctx"); codeText(p, d.what); body.append(section("What's being decided", p)); }
   if (typeof d.command === "string" && d.command.trim()) body.append(cmdBlock(d.command, `cmd-${d.id}`));
   const bg = strList(d.background); // shown in the disclosure group below
   if (d.when) body.append(section("When", el("p", "ctx", String(d.when))));
@@ -661,6 +665,7 @@ function tileBody(d) {
       if (d.recommended) w.append(el("b", null, isRec ? "Why: " : "Why not: "));
       w.append(String(why)); b.append(w);
     }
+    if (p.choice === c.id) b.append(el("span", "sel-hint", "Selected · tap again to clear"));
     b.onclick = () => { const cur = pick(d.id); cur.choice = cur.choice === c.id ? null : c.id; setStatus(""); render(); };
     group.append(b);
   }
@@ -674,7 +679,14 @@ function tileBody(d) {
     if (wasQueued !== queuedIds().includes(d.id)) render(); else { refreshDock(); const sm = $(`ss-${d.id}`); if (sm) sm.textContent = sendSummary(d); }
   };
   lab.append(ta); body.append(lab);
-  const sm = el("p", "send-sum", sendSummary(d)); sm.id = `ss-${d.id}`; sm.setAttribute("aria-live", "polite"); body.append(sm);
+  const sumRow = el("div", "sum-row");
+  const sm = el("p", "send-sum", sendSummary(d)); sm.id = `ss-${d.id}`; sm.setAttribute("aria-live", "polite"); sumRow.append(sm);
+  if (p.choice) {
+    const cc = el("button", "linkbtn", "Clear choice"); cc.type = "button"; cc.id = `cc-${d.id}`;
+    cc.onclick = () => { pick(d.id).choice = null; setStatus(""); render(); };
+    sumRow.append(cc);
+  }
+  body.append(sumRow);
   const bs = el("div", "body-send"); bs.append(sendBtn(d, `sb-${d.id}`, d.status === "answered" ? "Resend answer" : "Send this answer")); body.append(bs);
   return body;
 }
@@ -701,11 +713,15 @@ function renderTile(d) {
   const tt = el("span", "tt");
   if (d.status === "followup") tt.append(el("span", "badge move kicker", "Your move"));
   tt.append(el("span", "title", d.title || d.id));
-  if (d.what || d.summary) tt.append(el("span", "sum clamp", String(d.what || d.summary)));
+  if (d.what || d.summary) { const sm = el("span", "sum clamp"); codeText(sm, d.what || d.summary, true); tt.append(sm); }
   const meta = el("span", "metas");
   if (d.area) meta.append(el("span", "area-tag", String(d.area)));
   meta.append(el("span", "chip" + (u ? " " + u : ""), dueText(d)));
-  for (const t of tickets(d)) meta.append(el("span", "tk " + ticketTone(t.status), ticketText(t)));
+  for (const t of tickets(d)) {
+    const c = el("span", "tk " + ticketTone(t.status), ticketText(t));
+    if (/^https:\/\//.test(t.url || "")) { c.classList.add("lnk"); c.setAttribute("role", "link"); c.title = t.url; c.onclick = (e) => openLink(e, t.url); } // shared data is untrusted
+    meta.append(c);
+  }
   const hsum = handlerSummary(d); if (hsum) { const c = el("span", "agentchip " + hsum[0]); c.append(el("i"), hsum[1]); meta.append(c); }
   const fr = freshness(d); if (fr) meta.append(el("span", "fresh " + fr[0], fr[1]));
   tt.append(meta);
@@ -735,7 +751,20 @@ function answerText(d) {
 function asTile(d) { return isOpenD(d) || (d.status === "followup" && Array.isArray(d.choices) && d.choices.some((c) => c && c.id)); }
 const noteOpen = new Set();
 // Text with `backtick` spans rendered as inline code (as text nodes, never HTML).
-function codeText(parent, text) { String(text).split("`").forEach((part, i) => { if (part) parent.append(i % 2 ? el("code", null, part) : part); }); }
+// URLs, PR numbers and LLABS tickets become links. Inside a header button a real <a> is invalid, so `inButton` uses a span that opens on click without toggling the tile.
+const LINK_RE = /(https:\/\/[^\s<>"'`)\]]+[^\s<>"'`)\].,;:!?])|\bPR #(\d{3,6})\b|#(\d{4,6})\b|\b(LLABS-\d{2,6})\b/g;
+function linkFor(m) { return m[1] ? m[1] : m[2] || m[3] ? `https://github.com/Levangie-Laboratories/llabs-core/pull/${m[2] || m[3]}` : `https://linear.app/levangielabs/issue/${m[4]}`; }
+function openLink(e, url) { e.preventDefault(); e.stopPropagation(); window.open(url, "_blank", "noopener"); }
+function linkEl(text, url, inButton) {
+  if (!inButton) { const a = el("a", null, text); a.href = url; a.target = "_blank"; a.rel = "noopener"; return a; }
+  const s = el("span", "lnk", text); s.setAttribute("role", "link"); s.title = url; s.onclick = (e) => openLink(e, url); return s;
+}
+function linkText(parent, text, inButton) {
+  const s = String(text); let last = 0;
+  for (const m of s.matchAll(LINK_RE)) { if (m.index > last) parent.append(s.slice(last, m.index)); parent.append(linkEl(m[0], linkFor(m), inButton)); last = m.index + m[0].length; }
+  if (last < s.length) parent.append(s.slice(last));
+}
+function codeText(parent, text, inButton) { String(text).split("`").forEach((part, i) => { if (part) i % 2 ? parent.append(el("code", null, part)) : linkText(parent, part, inButton); }); }
 function agentLine(d, cls, prefix) {
   if (!d.agentNote) return null;
   const wrap = el("span", (cls || "agent") + " note-wrap"), txt = el("span", "note-txt");
@@ -938,6 +967,10 @@ function render() {
   if (!layout) return;
   const placed = new Set(Object.values(layout).flat());
   for (const d of decisions) if (!placed.has(d.id)) layout[groupOf(d)].push(d.id);
+  // Items stay put while you look, except one that comes back to you: it moves up into "Needs you" at once.
+  for (const g of ["agent", "others", "recent"]) for (const id of layout[g].filter((id) => byId.has(id) && groupOf(byId.get(id)) === "need")) {
+    layout[g] = layout[g].filter((x) => x !== id); layout.need.unshift(id);
+  }
   if (editId && (byId.get(editId) || {}).status !== "answered") { if (!sending.has(editId)) delete picks[editId]; editId = null; }
   if (act && !byId.has(act.id)) act = null;
 
