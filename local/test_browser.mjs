@@ -176,6 +176,9 @@ test("every action still works, and typing survives live updates", async (t) => 
   assert.deepEqual(await page.evaluate(() => { const a = document.activeElement; return [a.id, a.value, a.selectionStart]; }), ["n-open-2", "half a thought", 14]);
   await page.keyboard.type(", finished");
   await page.click("#c-open-2-c3");
+  await page.click("#cc-open-2");  // Clear choice
+  assert.equal(await page.getAttribute("#c-open-2-c3", "aria-checked"), "false");
+  await page.click("#c-open-2-c3");
   await page.click("#sb-open-2");
   await settle(() => /Sent/.test(document.querySelector('[data-id="open-2"] .badge')?.textContent || ""));
   assert.deepEqual(((await store("responses/open-2")).data), { ...(await store("responses/open-2")).data, choice: "c3", note: "half a thought, finished" });
@@ -202,6 +205,9 @@ test("every action still works, and typing survives live updates", async (t) => 
   assert.ok(await page.isVisible("#hl-row-02"));
   await page.selectOption("#sortSel", "number");
   assert.equal(await page.$eval("#tiles [data-id]", (e) => e.dataset.id), "open-1");
+  // A decision that comes back to you moves into "Needs you" while you watch.
+  edit("row-15", (d) => ({ ...d, status: "followup", agentNote: "Back to you: pick again" }));
+  await settle(() => !!document.querySelector('#tiles [data-id="row-15"]') && !document.querySelector('#recent [data-id="row-15"]'));
   assert.deepEqual(errors, []);
 });
 
