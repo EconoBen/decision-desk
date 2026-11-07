@@ -299,6 +299,9 @@ class Texting:
         with self.lock:
             phone = self.phone()
             if not phone or norm_phone(sender) != phone:
+                s = str(sender or "")
+                masked = ("…@" + s.split("@", 1)[1]) if "@" in s else ("…" + s[-4:])
+                print(f"sms: text from an unverified handle dropped: {masked}", file=sys.stderr)  # Apple may send as an email
                 return None
             t = str(text or "").strip()
             stop = t.lower().strip(" .!") == "stop"
