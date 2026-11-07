@@ -34,6 +34,16 @@ def code(id):
     return CODE_LETTERS[h[0] % 22] + CODE_LETTERS[h[1] % 22] + CODE_DIGITS[h[2] % 8]
 
 
+def when(v):
+    """Epoch seconds from an ISO string or epoch s/ms, as inject.py reads them. 0 if unreadable."""
+    try:
+        if isinstance(v, (int, float)):
+            return v / 1000 if v > 1e11 else float(v)
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
 def plain(text, limit=None):
     """Decision text as it should read in a text message: no markdown, no inline code, one line, cut at a word."""
     t = re.sub(r"\s*\(`[^`]*`\)", "", str(text or ""))       # a parenthesised command adds nothing on a phone
@@ -222,7 +232,9 @@ class Texting:
             sent, say = state.get("sent", {}), state.get("say", [])
             nxt = next(((n, i, d) for n, (i, d) in enumerate(pend, 1)
                         if sent.get(i) != f"{d.get('status') or 'open'}|{d.get('changedAt') or ''}"), None)
-            text = say[0] if say else nxt and self.compose(nxt[1], nxt[2], len(pend) > 1, nxt[0], len(pend))
+            seen = None if say else self._read_receipt(state)
+            text = (say[0] if say else seen[1] if seen
+                    else nxt and self.compose(nxt[1], nxt[2], len(pend) > 1, nxt[0], len(pend)))
             nxt = nxt and nxt[1:]
         self.client.start()  # keeps the inbound stream up while a phone is connected
         if not text:
@@ -237,10 +249,26 @@ class Texting:
             state = self._state()
             if say:
                 state["say"] = state.get("say", [])[1:]
+            elif seen:
+                state.get("receipts", {}).pop(seen[0], None)
             else:
                 state.setdefault("sent", {})[nxt[0]] = f"{nxt[1].get('status') or 'open'}|{nxt[1].get('changedAt') or ''}"
             self._save(state)
-        return "said" if say else nxt[0]  # ponytail: one text per tick paces bursts, which Photon says get lines flagged
+        return "said" if say else f"read:{seen[0]}" if seen else nxt[0]  # ponytail: one text per tick paces bursts, which Photon says get lines flagged
+
+    def _read_receipt(self, state):
+        """(id, text) for the first answer sent by text that its Claude session has now acted on (it wrote agentAt
+        after the answer), so Ben knows it was read and not just recorded. Drops answers whose decision is gone."""
+        for id, at in list(state.get("receipts", {}).items()):
+            d = self.read("decisions", id)
+            if not d:
+                state["receipts"].pop(id)
+                continue
+            if when(d.get("agentAt")) >= when(at) > 0:
+                who = plain((d.get("agent") or {}).get("label") if isinstance(d.get("agent"), dict) else "", 60) or "Its Claude session"
+                note = plain(d.get("agentNote"), 160)
+                return id, f"Read, {code(id)}: {who} picked up your answer to \"{plain(d.get('title') or id, 80)}\"." + (f"\n\n{note}" if note else "")
+        return None
 
     def reload(self, env_path):
         """Pick up a new or changed spectrum.env without a restart; setup_texting.py relies on this."""
@@ -271,6 +299,9 @@ class Texting:
         with self.lock:
             phone = self.phone()
             if not phone or norm_phone(sender) != phone:
+                s = str(sender or "")
+                masked = ("…@" + s.split("@", 1)[1]) if "@" in s else ("…" + s[-4:])
+                print(f"sms: text from an unverified handle dropped: {masked}", file=sys.stderr)  # Apple may send as an email
                 return None
             t = str(text or "").strip()
             stop = t.lower().strip(" .!") == "stop"
@@ -279,7 +310,12 @@ class Texting:
             try:
                 self.client.send(phone, reply)
             except Exception as e:
-                print(f"sms: reply failed: {type(e).__name__}", file=sys.stderr)
+                print(f"sms: reply failed, queued to retry: {type(e).__name__}", file=sys.stderr)
+                if not stop:  # every text Ben sends gets its answer, even when Photon refuses it the first time
+                    with self.lock:
+                        state = self._state()
+                        state.setdefault("say", []).append(reply)
+                        self._save(state)
         if stop:
             with self.lock:
                 self._forget()  # after the reply, so the reply still goes out
@@ -296,7 +332,7 @@ class Texting:
             for id, _ in pend:
                 state.get("sent", {}).pop(id, None)  # the outbound loop re-sends them, paced
             self._save(state)
-            return None
+            return f"Sending your {len(pend)} open decision{'s' if len(pend) != 1 else ''} now, one at a time."
         m = re.fullmatch(r"(\d+)(?:\s+(.*))?", t, re.S)
         if m and len(pend) == 1:
             id, d = pend[0]
@@ -315,11 +351,16 @@ class Texting:
         if not 1 <= int(n) <= len(choices):
             return self._unmatched(pend)
         # Exactly what the page's writeAnswer() does: the response doc, then status "answered".
-        self.write("responses", id, {"choice": choices[int(n) - 1].get("id"), "note": (note or "").strip(), "submittedAt": now_iso()})
+        at = now_iso()
+        self.write("responses", id, {"choice": choices[int(n) - 1].get("id"), "note": (note or "").strip(), "submittedAt": at})
+        state = self._state()
+        state.setdefault("receipts", {})[id] = at  # texted again once its Claude session acts on it
+        self._save(state)
         if d.get("status") != "answered":
             self.write("decisions", id, {"status": "answered"}, True)
         picked = choices[int(n) - 1]
-        return f"Got it, {code(id)}: {plain(d.get('title') or id, 80)} → {plain(picked.get('label') or picked.get('id'), LABEL_MAX)}"
+        return (f"Got it, {code(id)}: {plain(d.get('title') or id, 80)} → {plain(picked.get('label') or picked.get('id'), LABEL_MAX)}"
+                "\n\nSaved on your desk. You'll get another text when its Claude session reads it.")
 
     def _may_help(self):
         now = time.time()

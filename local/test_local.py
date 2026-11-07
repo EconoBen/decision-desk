@@ -291,7 +291,7 @@ class TextingTest(Base):
         self.verified()
         self.assertEqual(self.t.tick(), "move")
         self.assertEqual(self.client.sent[0][1].splitlines()[:4], ["Your move", "", "Pick again?", ""])
-        self.assertEqual(self.t.inbound(self.PHONE, "2"), f"Got it, {sms.code('move')}: Pick again? → Y")
+        self.assertEqual(self.t.inbound(self.PHONE, "2").split("\n\n")[0], f"Got it, {sms.code('move')}: Pick again? → Y")
         self.assertEqual(self.doc("decisions", "move")["status"], "answered")
 
     def test_reply_one_pending(self):
@@ -299,7 +299,7 @@ class TextingTest(Base):
         self.verified()
         self.t.tick()
         self.assertIn("Reply with a number", self.client.sent[0][1])
-        self.assertEqual(self.t.inbound("+1 415 555 0100", "2 not\nyet"), f"Got it, {sms.code('solo')}: Ship? → No")
+        self.assertEqual(self.t.inbound("+1 415 555 0100", "2 not\nyet").split("\n\n")[0], f"Got it, {sms.code('solo')}: Ship? → No")
         r = self.doc("responses", "solo")
         self.assertEqual((r["choice"], r["note"]), ("no", "not\nyet"))
         self.assertEqual(self.doc("decisions", "solo")["status"], "answered")
@@ -313,9 +313,9 @@ class TextingTest(Base):
             self.t.helps = []
             self.assertIn("Several are open", self.t.inbound(self.PHONE, text))
         self.assertEqual(list(self.db.glob("responses/*.json")), [])
-        self.assertEqual(self.t.inbound(self.PHONE, "RC7-CVE 2 with an expiry"), f"Got it, {sms.code('rc7-cve')}: CVE? → Allow")
+        self.assertEqual(self.t.inbound(self.PHONE, "RC7-CVE 2 with an expiry").split("\n\n")[0], f"Got it, {sms.code('rc7-cve')}: CVE? → Allow")
         self.assertEqual(self.doc("responses", "rc7-cve")["note"], "with an expiry")
-        self.assertEqual(self.t.inbound(self.PHONE, "[rc7-key] 1"), f"Got it, {sms.code('rc7-key')}: Key? → Me")
+        self.assertEqual(self.t.inbound(self.PHONE, "[rc7-key] 1").split("\n\n")[0], f"Got it, {sms.code('rc7-key')}: Key? → Me")
         self.assertEqual(self.doc("responses", "rc7-key")["note"], "")
 
     def test_texts_read_as_plain_text(self):
@@ -340,8 +340,31 @@ class TextingTest(Base):
         self.assertTrue(text.startswith(f"Decision {c} (1 of 2)\nFrom: Ben's ICE session\n\n"), text[:80])
         self.assertIn("\n\n1. Add one line", text)
         self.assertIn("(recommended)\n\n2. Stop the drill\n\n", text)
-        self.assertEqual(self.t.inbound(self.PHONE, f"{c.lower()} 1 go"), f"Got it, {c}: Fix the drill.sh wipe, then rerun? → Add one line and rerun run 5")
+        self.assertEqual(self.t.inbound(self.PHONE, f"{c.lower()} 1 go").split("\n\n")[0], f"Got it, {c}: Fix the drill.sh wipe, then rerun? → Add one line and rerun run 5")
         self.assertEqual(self.doc("responses", "trainb-render-81c4")["note"], "go")
+
+    def test_every_text_gets_a_reply_and_a_read_receipt(self):
+        """Ben wants to know each text he sends got through and was read, not just recorded."""
+        self.put("decisions", "ship", decision("Ship?", ["yes", "no"]))
+        server.write_doc("decisions", "ship", {"agent": {"kind": "session", "id": "s1", "label": "Ben's ICE session"}}, True)
+        self.verified()
+        self.t.tick()
+        self.client.sent.clear()
+        c = sms.code("ship")
+        self.client.fail = RuntimeError("Target not allowed for this project")  # Photon refuses the reply
+        reply = self.t.inbound(self.PHONE, "1 go")
+        self.assertIn("You'll get another text when its Claude session reads it.", reply)
+        self.client.fail = None
+        self.t.retry_at = 0
+        self.assertEqual(self.t.tick(), "said")  # the refused reply goes out on the next tick
+        self.assertTrue(self.client.sent[-1][1].startswith(f"Got it, {c}: Ship? → Yes"))
+        self.assertIsNone(self.t.tick())  # not read yet, so nothing more
+        server.write_doc("decisions", "ship", {"agentAt": "2000-01-01T00:00:00Z"}, True)
+        self.assertIsNone(self.t.tick())  # an agentAt from before the answer isn't a read
+        server.write_doc("decisions", "ship", {"agentAt": "2999-01-01T00:00:00Z", "agentNote": "Shipping now."}, True)
+        self.assertEqual(self.t.tick(), "read:ship")
+        self.assertEqual(self.client.sent[-1][1], f'Read, {c}: Ben\'s ICE session picked up your answer to "Ship?".\n\nShipping now.')
+        self.assertIsNone(self.t.tick())  # once only
 
     def test_help_list_stop(self):
         self.put("decisions", "a", decision("A?", ["x"], order=1))
@@ -351,7 +374,7 @@ class TextingTest(Base):
         self.assertEqual(self.t.inbound(self.PHONE, "?"), sms.HELP)
         self.t.tick(), self.t.tick()
         self.assertIsNone(self.t.tick())
-        self.assertIsNone(self.t.inbound(self.PHONE, "List"))
+        self.assertEqual(self.t.inbound(self.PHONE, "List"), "Sending your 2 open decisions now, one at a time.")
         self.assertEqual([self.t.tick(), self.t.tick(), self.t.tick()], ["a", "b", None])
         self.client.sent.clear()
         self.assertIn("Texts are off", self.t.inbound(self.PHONE, "STOP"))
